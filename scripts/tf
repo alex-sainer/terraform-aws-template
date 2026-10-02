@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/tf [-e ENV | --env ENV] <init|plan|apply|import> [args...]
+
+Ohne -e/--env kommt das Environment aus dem aktuellen Git-Branch:
+  main            -> prod
+  develop         -> dev
+  staging         -> staging
+  preview/<name>  -> preview-<name>
+
+-e und --env sind gleichwertig und stehen vor dem Subcommand.
+Der Wert ist der Workspace-Name: prod, dev, staging oder preview-<name>.
+
+Beispiele:
+  scripts/tf init
+  scripts/tf plan
+  scripts/tf -e dev plan
+  scripts/tf --env prod apply
+  scripts/tf --env preview-feature123 init
+  scripts/tf import aws_s3_bucket.example my-bucket
+EOF
+  exit 2
+}
+
+ENV_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -e|--env)
+      [[ $# -ge 2 ]] || usage
+      ENV_ARG="$2"
+      shift 2
+      ;;
+    --env=*)
+      ENV_ARG="${1#--env=}"
+      [[ -n "$ENV_ARG" ]] || usage
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || usage
+CMD="$1"
+shift
+
+validate_env() {
+  local name="$1"
+  if [[ "$name" == "default" ]]; then
+    echo "Environment 'default' ist nicht erlaubt." >&2
+    exit 1
+  fi
+  if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    echo "Environment '$name' ist ungültig." >&2
+    exit 1
+  fi
+  if [[ "$name" == "prod" || "$name" == "dev" || "$name" == "staging" ]]; then
+    return 0
+  fi
+  if [[ "$name" == preview-* && "$name" != "preview-" ]]; then
+    return 0
+  fi
+  echo "Environment '$name' ist nicht erlaubt. Erlaubt: prod, dev, staging, preview-<name>." >&2
+  exit 1
+}
+
+workspace_from_branch() {
+  local b="$1"
+  case "$b" in
+    main) echo prod ;;
+    develop) echo dev ;;
+    staging) echo staging ;;
+    preview/*)
+      local rest="${b#preview/}"
+      if [[ -z "$rest" || "$rest" == *"/"* ]]; then
+        echo "Branch '$b' ist kein gültiges Preview-Environment." >&2
+        echo "Erlaubt ist genau eine Ebene: preview/<name>." >&2
+        exit 1
+      fi
+      echo "preview-${rest}"
+      ;;
+    HEAD)
+      echo "Detached HEAD. Environment mit -e oder --env angeben." >&2
+      exit 1
+      ;;
+    *)
+      echo "Branch '$b' ist keinem Environment zugeordnet." >&2
+      echo "Erlaubt: main, develop, staging, preview/<name> oder -e/--env." >&2
+      exit 1
+      ;;
+  esac
+}
+
+if ! branch="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+  branch="HEAD"
+fi
+BRANCH_WS=""
+case "$branch" in
+  main) BRANCH_WS="prod" ;;
+  develop) BRANCH_WS="dev" ;;
+  staging) BRANCH_WS="staging" ;;
+  preview/*)
+    rest="${branch#preview/}"
+    if [[ -n "$rest" && "$rest" != *"/"* ]]; then
+      BRANCH_WS="preview-${rest}"
+    fi
+    ;;
+esac
+
+if [[ -n "$ENV_ARG" ]]; then
+  WS="$ENV_ARG"
+  validate_env "$WS"
+  if [[ -n "$BRANCH_WS" && "$BRANCH_WS" != "$WS" ]]; then
+    echo "Hinweis: Environment '$WS' weicht vom Branch '$branch' ($BRANCH_WS) ab." >&2
+  fi
+else
+  WS="$(workspace_from_branch "$branch")"
+  validate_env "$WS"
+fi
+
+ENV_DIR="$ROOT/environments"
+TFVARS="$ENV_DIR/${WS}.tfvars"
+BACKEND="$ENV_DIR/${WS}.backend.tfvars"
+SECRETS="$ENV_DIR/${WS}.secrets.tfvars"
+PLAN="$ENV_DIR/${WS}.tfplan"
+
+var_args=(-var-file="$TFVARS")
+if [[ -f "$SECRETS" ]]; then
+  var_args+=(-var-file="$SECRETS")
+fi
+
+require_file() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    echo "Fehlt: $path" >&2
+    exit 1
+  fi
+}
+
+ensure_workspace() {
+  local current
+  unset TF_WORKSPACE
+  current="$(terraform workspace show)"
+  if [[ "$current" != "$WS" ]]; then
+    echo "Aktiver Workspace ist '$current', erwartet '$WS'." >&2
+    echo "Zuerst ausführen: scripts/tf init" >&2
+    exit 1
+  fi
+  export TF_WORKSPACE="$WS"
+}
+
+case "$CMD" in
+  init)
+    if [[ "$WS" == preview-* && ! -f "$TFVARS" ]]; then
+      require_file "$ENV_DIR/preview.tfvars.example"
+      require_file "$ENV_DIR/preview.backend.tfvars.example"
+      cp "$ENV_DIR/preview.tfvars.example" "$TFVARS"
+      if [[ ! -f "$BACKEND" ]]; then
+        cp "$ENV_DIR/preview.backend.tfvars.example" "$BACKEND"
+      fi
+      echo "Preview-Dateien angelegt:"
+      echo "  $TFVARS"
+      echo "  $BACKEND"
+      echo "Werte anpassen, danach init erneut ausführen."
+      exit 0
+    fi
+    require_file "$BACKEND"
+    unset TF_WORKSPACE
+    terraform init -reconfigure -input=false -backend-config="$BACKEND"
+    if terraform workspace list | sed 's/^[* ] //' | grep -qx "$WS"; then
+      terraform workspace select "$WS"
+    else
+      terraform workspace new "$WS"
+    fi
+    ;;
+  plan)
+    require_file "$TFVARS"
+    ensure_workspace
+    terraform plan -input=false "${var_args[@]}" -out="$PLAN" "$@"
+    ;;
+  apply)
+    if [[ $# -gt 0 ]]; then
+      echo "apply akzeptiert keine weiteren Argumente und wendet nur $PLAN an." >&2
+      exit 1
+    fi
+    ensure_workspace
+    if [[ ! -f "$PLAN" ]]; then
+      echo "Kein Plan unter $PLAN. Zuerst: scripts/tf plan" >&2
+      exit 1
+    fi
+    terraform apply -input=false "$PLAN"
+    rm -f "$PLAN"
+    ;;
+  import)
+    require_file "$TFVARS"
+    ensure_workspace
+    terraform import -input=false "${var_args[@]}" "$@"
+    ;;
+  *)
+    usage
+    ;;
+esac
