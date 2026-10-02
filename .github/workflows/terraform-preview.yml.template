@@ -1,0 +1,37 @@
+# Vorlage. GitHub führt diese Datei nicht aus.
+# Im abgeleiteten Repository die Endung .template entfernen.
+name: Terraform preview
+
+on:
+  push:
+    branches:
+      - "preview/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./.github/actions/tf-run
+        with:
+          command: preview
+          ref: ${{ github.sha }}
+          head-ref: ${{ github.ref_name }}
+          role-arn: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          executable: ${{ vars.EXECUTABLE || 'terraform' }}
+          github-token: ${{ github.token }}
+          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}

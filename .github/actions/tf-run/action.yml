@@ -1,0 +1,146 @@
+name: Terraform ausführen
+description: OIDC, Workspace-Sperre und scripts/tf für Plan, Apply, Unlock oder Preview.
+
+inputs:
+  command:
+    description: plan, apply, unlock oder preview
+    required: true
+  ref:
+    description: Commit, der ausgecheckt wird
+    required: true
+  workspace:
+    description: Workspace. Bei preview leer, dann kommt er aus head-ref.
+    required: false
+    default: ""
+  head-ref:
+    description: Branch-Name für die Sperre
+    required: true
+  pr:
+    description: Pull-Request-Nummer, leer beim Preview-Push
+    required: false
+    default: ""
+  comment-id:
+    description: Kommentar für die Reaktion
+    required: false
+    default: ""
+  role-arn:
+    description: IAM-Role für OIDC
+    required: true
+  aws-region:
+    description: Region für die AWS-Anmeldung
+    required: true
+  executable:
+    description: terraform oder tofu
+    required: true
+  github-token:
+    description: Token für Kommentare und Artifacts
+    required: false
+    default: ""
+  secrets-tfvars:
+    description: Inhalt von environments/<env>.secrets.tfvars
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Skripte sichern
+      shell: bash
+      run: |
+        rm -rf "$RUNNER_TEMP/tf-run"
+        cp -a "${{ github.action_path }}" "$RUNNER_TEMP/tf-run"
+
+    - name: Commit auschecken
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Role prüfen
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role-arn }}
+        PR_NUMBER: ${{ inputs.pr }}
+      run: |
+        if [[ -z "$ROLE" ]]; then
+          echo "Variable AWS_ROLE_ARN fehlt." >&2
+          if [[ -n "$PR_NUMBER" ]]; then
+            printf '### Terraform\n\nVariable `AWS_ROLE_ARN` fehlt.\n' > "$RUNNER_TEMP/tf-comment-err.md"
+          fi
+          exit 1
+        fi
+
+    - name: Terraform installieren
+      if: inputs.command != 'unlock'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.10.5"
+        terraform_wrapper: false
+
+    - name: Bei AWS anmelden
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: gha-tf-${{ github.run_id }}
+
+    - name: Terraform ausführen
+      id: run
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        GIT_SHA: ${{ inputs.ref }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        TF_WORKSPACE: ${{ inputs.workspace }}
+        PR_NUMBER: ${{ inputs.pr }}
+        TF_EXECUTABLE: ${{ inputs.executable }}
+        TF_SECRETS_TFVARS: ${{ inputs.secrets-tfvars }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash "$RUNNER_TEMP/tf-run/run.sh"
+
+    - name: Plan speichern
+      id: upload
+      if: steps.run.outputs.upload_plan == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.run.outputs.artifact_name }}
+        path: ${{ steps.run.outputs.plan_file }}
+        retention-days: 14
+        if-no-files-found: error
+
+    - name: Sperre lösen, wenn der Plan nicht gespeichert wurde
+      if: steps.run.outputs.upload_plan == 'true' && steps.upload.outcome == 'failure'
+      shell: bash
+      run: |
+        if [[ -f "$RUNNER_TEMP/tf-lock-held.env" ]]; then
+          # shellcheck disable=SC1091
+          source "$RUNNER_TEMP/tf-lock-held.env"
+          bash "$RUNNER_TEMP/tf-run/lock.sh" release
+        fi
+
+    - name: Pull-Request-Kommentar
+      if: always()
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr }}
+        RUN_OUTCOME: ${{ steps.run.outcome }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: bash "$RUNNER_TEMP/tf-run/post-comment.sh"
+
+    - name: Reaktion
+      if: always() && inputs.comment-id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        COMMENT_ID: ${{ inputs.comment-id }}
+        RUN_OUTCOME: ${{ steps.run.outcome }}
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        content="-1"
+        if [[ "$RUN_OUTCOME" == "success" && "$UPLOAD_OUTCOME" != "failure" ]]; then
+          content="+1"
+        fi
+        gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+          -f content="$content" >/dev/null || true

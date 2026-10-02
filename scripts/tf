@@ -4,6 +4,16 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# terraform oder tofu. In der Umgebung überschreibbar: EXECUTABLE=tofu scripts/tf plan
+EXECUTABLE="${EXECUTABLE:-terraform}"
+case "$EXECUTABLE" in
+  terraform|tofu) ;;
+  *)
+    echo "EXECUTABLE muss terraform oder tofu sein, nicht '$EXECUTABLE'." >&2
+    exit 1
+    ;;
+esac
+
 usage() {
   cat <<'EOF'
 Usage: scripts/tf [-e ENV | --env ENV] <init|plan|apply|import> [args...]
@@ -24,6 +34,7 @@ Beispiele:
   scripts/tf --env prod apply
   scripts/tf --env preview-feature123 init
   scripts/tf import aws_s3_bucket.example my-bucket
+  EXECUTABLE=tofu scripts/tf plan
 EOF
   exit 2
 }
@@ -147,10 +158,18 @@ require_file() {
   fi
 }
 
+require_executable() {
+  if ! command -v "$EXECUTABLE" >/dev/null 2>&1; then
+    echo "Programm '$EXECUTABLE' wurde nicht gefunden." >&2
+    exit 1
+  fi
+}
+
 ensure_workspace() {
   local current
   unset TF_WORKSPACE
-  current="$(terraform workspace show)"
+  require_executable
+  current="$("$EXECUTABLE" workspace show)"
   if [[ "$current" != "$WS" ]]; then
     echo "Aktiver Workspace ist '$current', erwartet '$WS'." >&2
     echo "Zuerst ausführen: scripts/tf init" >&2
@@ -176,17 +195,18 @@ case "$CMD" in
     fi
     require_file "$BACKEND"
     unset TF_WORKSPACE
-    terraform init -reconfigure -input=false -backend-config="$BACKEND"
-    if terraform workspace list | sed 's/^[* ] //' | grep -qx "$WS"; then
-      terraform workspace select "$WS"
+    require_executable
+    "$EXECUTABLE" init -reconfigure -input=false -backend-config="$BACKEND"
+    if "$EXECUTABLE" workspace list | sed 's/^[* ] //' | grep -qx "$WS"; then
+      "$EXECUTABLE" workspace select "$WS"
     else
-      terraform workspace new "$WS"
+      "$EXECUTABLE" workspace new "$WS"
     fi
     ;;
   plan)
     require_file "$TFVARS"
     ensure_workspace
-    terraform plan -input=false "${var_args[@]}" -out="$PLAN" "$@"
+    "$EXECUTABLE" plan -input=false "${var_args[@]}" -out="$PLAN" "$@"
     ;;
   apply)
     if [[ $# -gt 0 ]]; then
@@ -198,13 +218,13 @@ case "$CMD" in
       echo "Kein Plan unter $PLAN. Zuerst: scripts/tf plan" >&2
       exit 1
     fi
-    terraform apply -input=false "$PLAN"
+    "$EXECUTABLE" apply -input=false "$PLAN"
     rm -f "$PLAN"
     ;;
   import)
     require_file "$TFVARS"
     ensure_workspace
-    terraform import -input=false "${var_args[@]}" "$@"
+    "$EXECUTABLE" import -input=false "${var_args[@]}" "$@"
     ;;
   *)
     usage
