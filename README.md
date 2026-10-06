@@ -1,41 +1,69 @@
 # Terraform AWS Template
 
-Ausgangspunkt für ein AWS-Projekt mit Terraform oder OpenTofu. Du legst daraus ein eigenes Repository an, ersetzt die Platzhalter und schreibst deine Ressourcen dazu. Ein privater Beispiel-Bucket zeigt, wie Ressource, Variablen und Tags zusammenhängen.
+Starting point for an AWS project with Terraform or OpenTofu. You create your own repository from it, replace the placeholders, and add your resources. A private example bucket shows how a resource, variables, and tags fit together.
 
-## Worum es geht
+## What this is
 
-Dieselbe Codebasis beschreibt mehrere Umgebungen. Jede Umgebung ist ein eigener Terraform-Workspace mit eigenem State: `dev`, `staging`, `prod` und beliebig viele `preview-<name>`. Der State liegt in einem gemeinsamen S3-Bucket. Der Workspace trennt ihn, zum Beispiel `env:/prod/...` und `env:/dev/...`.
+This template uses a branch-based approach. The Git branch is the environment.
 
-Der Git-Branch sagt, welche Umgebung gemeint ist. `main` ist Produktion, `develop` ist Development, `staging` ist Staging, `preview/<name>` ist eine eigene, kurzlebige Umgebung. Die genaue Zuordnung steht unter [Branch und Workspace](#branch-und-workspace).
+One codebase describes every environment. Each environment is its own Terraform workspace with its own state: `dev`, `staging`, `prod`, and as many `preview-<name>` workspaces as you need. State lives in one shared S3 bucket. The workspace separates it, for example `env:/prod/...` and `env:/dev/...`.
 
-Alle Umgebungsdateien liegen auf jedem Branch. Ein Merge von `develop` nach `staging` und weiter nach `main` ändert deshalb nicht, in welchen State geschrieben wird. Lokal entscheidet der ausgecheckte Branch. In einem Pull Request entscheidet der Zielbranch, außer der Head heißt `preview/<name>`: dann gilt immer dieser Preview-Branch. Details stehen unter [Pipeline](#pipeline).
+| Branch           | Workspace        |
+| ---------------- | ---------------- |
+| `main`           | `prod`           |
+| `develop`        | `dev`            |
+| `staging`        | `staging`        |
+| `preview/<name>` | `preview-<name>` |
 
-## Warum
+`scripts/tf` reads the checked-out branch and selects the workspace, the variable file, and the backend. For a preview, only the first `/` becomes a hyphen. `preview/feature123` becomes `preview-feature123`, and `preview/ticket-769` becomes `preview-ticket-769`.
 
-Branch, Workspace, State und die Bedienung in GitHub sind hier schon festgelegt. Ein neues Projekt übernimmt diese Entscheidungen.
+Every environment file is present on every branch. Locally, the checked-out branch selects which files are used. In a pull request, the target branch selects them, unless the head is named `preview/<name>`: then that preview branch applies. The pipeline that does this in GitHub is in [docs/pipeline.md](docs/pipeline.md).
 
-- Lokal reichen `scripts/tf plan` und `scripts/tf apply`. Das Skript wählt Workspace, Variablen und Backend.
-- `apply` nimmt nur die Plan-Datei, die direkt davor entstanden ist.
-- In GitHub steuerst du denselben Ablauf per Kommentar. `/tf plan` schreibt den Plan in den Pull Request. `/tf apply` wendet genau diesen Plan an.
-- Zwei offene Pull Requests gegen dieselbe Umgebung teilen sich eine Sperre. Der erste `/tf plan` hält sie, bis dieser Pull Request applied oder `/tf unlock` kommt. Der andere Pull Request plant erst danach neu.
-- Die Pipeline meldet sich bei AWS per OIDC an, mit kurzlebigen Credentials und ohne Access-Key im Repository.
-- Ein Branch `preview/<name>` bekommt eine eigene Umgebung. Jeder Push dorthin plant und wendet an. Der Weg von develop über staging nach Produktion bleibt davon unberührt.
+## Why
 
-## So arbeitest du damit
+The branch is already the path a change takes. Binding the environment to that branch keeps the promotion path and the state target aligned.
 
-1. Lege aus diesem Template dein Repository an und geh die Checkliste unter [How to setup](#how-to-setup) durch. Damit stehen State-Bucket, Namen und, wenn du sie willst, die GitHub-Pipeline.
-2. Für die tägliche Arbeit an Development checkst du `develop` aus. Änderungen wandern per Merge von `develop` nach `staging` und von `staging` nach `main`.
-3. Im Pull Request kommentierst du `/tf plan` und liest den Plan in der Antwort. Passt er, kommentierst du `/tf apply`. Auf dem Weg nach Staging und Produktion wartet Apply auf eine zusätzliche Freigabe in GitHub.
-4. Zum Ausprobieren, ohne `dev` zu verändern, legst du `preview/<name>` an. Push auf diesen Branch plant und wendet diese Umgebung an.
-5. Eigene Ressourcen kommen als weitere `.tf`-Dateien neben [`example-s3-bucket.tf`](example-s3-bucket.tf). Neue Variablen kommen nach `_variables.tf` und in `environments/<env>.tfvars`.
+Work starts on `develop` and moves by merge to `staging`, then to `main`. Each of those branches is one environment, and the configuration stays a single tree. `scripts/tf` reads the branch, so plan and apply use the state that belongs to the branch you are on. Because every branch carries every environment file, a merge leaves that choice to the branch name.
 
-## How to setup
+`preview/<name>` follows the same rule for a short-lived environment. The branch gets its own workspace, and dev, staging, and production stay on their own branches.
 
-1. Lege aus diesem Template ein neues Repository an oder klone es. Für die lokale Arbeit an dev checke `develop` aus. `main` ist prod, `staging` ist staging.
-2. Installiere Terraform `>= 1.10` oder OpenTofu, und richte AWS-Credentials für das Zielkonto ein. OpenTofu wählst du mit `export EXECUTABLE=tofu`.
-3. Ersetze in `environments/<env>.tfvars` und `environments/<env>.backend.tfvars` jeden Namen, der mit `REPLACE_ME` beginnt. Der State-Bucket-Name ist in allen Backend-Dateien und im TODO-Block von `_terraform.tf` derselbe.
-4. Lege den State-Bucket einmalig an, wie unter [State-Bucket bootstrapen](#state-bucket-bootstrapen) beschrieben.
-5. Initialisiere das Environment und wende den Plan an:
+Locally and in GitHub the command is `scripts/tf`. The pipeline sits on top of this mapping. Its setup, including OIDC and permissions, is separate: [docs/pipeline.md](docs/pipeline.md).
+
+## Setup
+
+These steps get an environment running from a branch on your machine.
+
+### 1. Create your repository
+
+Create a new repository from this template, or clone it. For day-to-day work, check out `develop`. `main` is prod, `staging` is staging.
+
+### 2. Choose Terraform or OpenTofu
+
+Install Terraform `>= 1.10` or OpenTofu, and set up AWS credentials for the target account.
+
+`EXECUTABLE` decides which program `scripts/tf` calls. Allowed values are `terraform` and `tofu`. If it is unset, `terraform` is used.
+
+```bash
+export EXECUTABLE=tofu
+scripts/tf plan
+```
+
+### 3. Set up the state bucket
+
+In `environments/<env>.tfvars` and `environments/<env>.backend.tfvars`, replace every name that starts with `REPLACE_ME`. The state bucket name is the same in every backend file and in the TODO block of `_terraform.tf`.
+
+The state bucket resource is commented out in `_terraform.tf`, with the placeholder `REPLACE_ME-tfstate`. The same placeholder is in the `*.backend.tfvars`. Create the bucket once:
+
+1. In `_terraform.tf`, comment out the `backend "s3"` block.
+2. Uncomment the resource `aws_s3_bucket.tfstate` together with versioning, encryption, and the public access block, and set the bucket name.
+3. Apply with local state.
+4. Comment the resource out again, enable the backend, and run `scripts/tf init`. Terraform asks about the migration; alternatively run `terraform init -migrate-state` with the same `-backend-config` as the script.
+
+During a normal apply the resource stays commented out, so that each environment leaves the shared state bucket alone.
+
+Bucket names in the `*.tfvars` start with `REPLACE_ME`. S3 rejects uppercase letters, so an apply fails until the names are replaced.
+
+### 4. Init, plan, and apply
 
 ```bash
 scripts/tf init
@@ -43,32 +71,28 @@ scripts/tf plan
 scripts/tf apply
 ```
 
-6. Richte die [OIDC-Anmeldung](#oidc-anmeldung) ein.
-7. Benenne die Workflow-Vorlagen um, damit GitHub sie in dem neuen Repository ausführt:
+`plan` writes `environments/<env>.tfplan`. `apply` applies only that file and deletes it afterwards. If no plan file is present, `apply` stops.
+
+The same commands work for another environment than the checked-out branch. `-e` and `--env` are equivalent and come before the subcommand. If the name differs from the branch, the script writes a note to stderr and continues.
 
 ```bash
-git mv .github/workflows/terraform-commands.yml.template .github/workflows/terraform-commands.yml
-git mv .github/workflows/terraform-preview.yml.template .github/workflows/terraform-preview.yml
+scripts/tf -e dev plan
+scripts/tf --env prod apply
 ```
 
-In diesem Template bleiben die Endungen `.template`. GitHub startet nur Dateien, die auf `.yml` oder `.yaml` enden.
+Further commands, including `import` and secret var-files, are under [Commands](#commands).
 
-Lokal geht das auch gegen einen anderen Branch, zum Beispiel `scripts/tf -e dev plan`. Die Pipeline setzt `-e` selbst, siehe [Pipeline](#pipeline).
+## On a branch
 
-## Branch und Workspace
+Check out `develop` for day-to-day work. Changes move by merge from `develop` to `staging` and from `staging` to `main`.
 
-| Branch           | Workspace und Dateiname |
-| ---------------- | ----------------------- |
-| `main`           | `prod`                  |
-| `develop`        | `dev`                   |
-| `staging`        | `staging`               |
-| `preview/<name>` | `preview-<name>`        |
+Your own resources go in as further `.tf` files next to [`example-s3-bucket.tf`](example-s3-bucket.tf). New variables go into `_variables.tf` and into `environments/<env>.tfvars`.
 
-Beim Preview wird nur das erste `/` zum Bindestrich. `preview/feature123` wird `preview-feature123`, `preview/ticket-769` wird `preview-ticket-769`.
+To try something without changing `dev`, create a `preview/<name>` branch. See [Preview environment](#preview-environment).
 
-Alle Env-Dateien liegen auf jedem Branch. Der Branch entscheidet, welche Dateien das Skript benutzt. Merges von `develop` nach `staging` nach `main` ändern damit nicht versehentlich das State-Ziel.
+Once the [pipeline](docs/pipeline.md) is in place, a pull request runs the same plan and apply from a comment.
 
-## Aufrufe
+## Commands
 
 ```bash
 scripts/tf init
@@ -77,181 +101,33 @@ scripts/tf apply
 scripts/tf import aws_s3_bucket.example my-bucket
 ```
 
-Lokal, unabhängig vom ausgecheckten Branch:
-
 ```bash
 scripts/tf -e dev plan
 scripts/tf --env prod apply
 scripts/tf --env preview-feature123 init
 ```
 
-`-e` und `--env` sind gleichwertig und stehen vor dem Subcommand. Weicht der Name vom Branch ab, schreibt das Skript einen Hinweis auf stderr und arbeitet weiter. Die Pipeline übergibt `-e` mit dem Workspace aus [Pipeline](#pipeline).
+`environments/<env>.secrets.tfvars` is passed in automatically once the file exists. It is gitignored. A template lives at `environments/secrets.tfvars.example`. In the pipeline, the secret `TF_SECRETS_TFVARS` writes this file when it is set. See [docs/pipeline.md](docs/pipeline.md).
 
-`plan` schreibt `environments/<env>.tfplan`. `apply` wendet nur diese Datei an und löscht sie danach. Liegt keine Plan-Datei, bricht `apply` ab.
+## Files
 
-`environments/<env>.secrets.tfvars` wird automatisch mitgegeben, sobald die Datei existiert. Sie ist gitignored. Eine Vorlage liegt unter `environments/secrets.tfvars.example`. In der Pipeline schreibt das Secret `TF_SECRETS_TFVARS` diese Datei, wenn es gesetzt ist.
+- `_terraform.tf` — Terraform version, provider, S3 backend
+- `_providers.tf` — all providers for the project are defined here
+- `_variables.tf` — variables
+- `_locals.tf` — shared locals and tags
+- `_outputs.tf` — outputs
+- `example-s3-bucket.tf` — private example bucket
+- `environments/<env>.tfvars` — variables for the environment
+- `environments/<env>.backend.tfvars` — backend configuration
+- `environments/<env>.secrets.tfvars` — optional secrets, not in Git
+- `environments/<env>.tfplan` — plan file, not in Git
+- `.github/workflows/terraform-commands.yml.template` — comment workflow, inactive until the pipeline setup removes the `.template` suffix
+- `.github/workflows/terraform-preview.yml.template` — preview push, also inactive until then
+- `.github/actions/tf-run/` — shared steps for OIDC, the lock, and `scripts/tf`
 
-## Pipeline
+`bucket`, `key`, and `region` live in the backend tfvars. The state key is the same for every environment (`terraform-aws-template/terraform.tfstate`). The workspace does the separation, for example `env:/prod/terraform-aws-template/terraform.tfstate`.
 
-Die Workflows liegen als Vorlagen unter `.github/workflows/*.yml.template`. Erst nach dem Umbenennen aus [How to setup](#how-to-setup) führt GitHub sie aus. Kommentare liest GitHub vom Default-Branch `main`. Ein Push auf `preview/<name>` liest den Workflow von diesem Branch.
-
-Der Code ist immer der Commit des Pull Requests oder des Pushes. Der Workspace kommt so zustande:
-
-- Beginnt der Head mit `preview/<name>`, gilt dieser Branch. `preview/feature123` wird `preview-feature123`, auch wenn der Pull Request nach `develop` zeigt.
-- Sonst gilt der Zielbranch: ein Feature-Branch nach `develop` trifft `dev`, `develop` nach `staging` trifft `staging`, `staging` nach `main` trifft `prod`.
-- Ein unbekannter Zielbranch, der kein `main`, `develop`, `staging` oder `preview/<name>` ist, bricht ab.
-
-Kommentare auf einem Pull Request, exakt und mit Schreibrecht im Repository:
-
-- `/tf plan` plant und schreibt die Ausgabe als Antwort in den Pull Request. Die binäre Plan-Datei liegt als Artifact `tfplan-<pr>-<sha>-<workspace>`.
-- `/tf apply` wendet genau dieses Artifact an. Ein neuer Commit braucht einen neuen Plan.
-- `/tf unlock` hebt die Sperre ohne Apply auf. Der gespeicherte Plan gilt danach nicht mehr.
-
-Forks sind ausgeschlossen. Apply auf `prod` und `staging` wartet auf die Freigabe des GitHub-Environments mit demselben Namen. Plan und Unlock warten nicht. `dev` und `preview-*` haben diese Pause nicht.
-
-Pro Workspace hält höchstens ein Pull Request die Sperre. Sie liegt im State-Bucket neben dem State-Key, beim Key `terraform-aws-template/terraform.tfstate` also unter `terraform-aws-template/pr-locks/<workspace>.json`. `/tf plan` legt sie an. Ein zweiter Pull Request gegen denselben Workspace bekommt keinen Plan und einen Kommentar mit dem Link auf den sperrenden Pull Request. `/tf apply` läuft nur für den Pull Request und den Commit der Sperre und löst sie danach. Schlägt der Plan fehl, wird die Sperre gelöst. Schlägt Apply fehl, bleibt sie bestehen.
-
-Ein Push auf `preview/<name>` führt init, plan und apply für `preview-<name>` aus, ohne Kommentar. Fehlen die Env-Dateien im Branch, legt `init` nur die Vorlagen an und der Lauf endet, bevor etwas angewendet wird. Die Dateien müssen im Branch stehen. Hält ein Pull Request die Sperre dieses Workspaces, bricht der Push ab.
-
-## OIDC-Anmeldung
-
-Die Pipeline hat keine langlebigen Access-Keys. Sie nimmt die Repository-Variable `AWS_ROLE_ARN` und tauscht ein GitHub-JWT gegen kurzlebige Credentials.
-
-### Provider und Role
-
-Einmal pro AWS-Konto, falls der Provider noch fehlt. Die Thumbprints verlangt die API. AWS prüft sie für diesen Provider nicht.
-
-```bash
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com \
-  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 1c58a3a8518e8759bf075b76b750d4f2df264fcd
-```
-
-Lege eine Role an, die nur diesen Subjects vertraut. `ORG` und `REPO` sind der GitHub-Name, `ACCOUNT_ID` die AWS-Kontonummer. Audience ist `sts.amazonaws.com`.
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-            },
-            "Action": "sts:AssumeRoleWithWebIdentity",
-            "Condition": {
-                "StringEquals": {
-                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-                },
-                "StringLike": {
-                    "token.actions.githubusercontent.com:sub": [
-                        "repo:ORG/REPO:ref:refs/heads/main",
-                        "repo:ORG/REPO:environment:prod",
-                        "repo:ORG/REPO:environment:staging",
-                        "repo:ORG/REPO:ref:refs/heads/preview/*"
-                    ]
-                }
-            }
-        }
-    ]
-}
-```
-
-`repo:ORG/REPO:ref:refs/heads/main` gilt für `/tf plan`, für `/tf unlock` und für Apply ohne GitHub-Environment (`dev`, Preview-Kommentar). Ein Kommentar-Workflow läuft auf dem Default-Branch, deshalb ist der Subject `main`. `environment:prod` und `environment:staging` gelten, sobald Apply das Environment setzt; der Subject ersetzt dann den Branch. `preview/*` gilt für den Push auf `preview/<name>`.
-
-```bash
-aws iam create-role \
-  --role-name REPLACE_ME-github-terraform \
-  --assume-role-policy-document file://trust.json
-```
-
-### Rechte der Role
-
-Die Role braucht den State-Bucket aus `environments/*.backend.tfvars`: State unter `env:/<workspace>/`, die Terraform-Lockdatei und `pr-locks/`. Passe den Bucket-Namen und das Key-Präfix an, wenn du sie geändert hast. Der Beispiel-Bucket aus `example-s3-bucket.tf` braucht eigene Rechte, passend zu den Namen in den tfvars.
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "StateList",
-            "Effect": "Allow",
-            "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-            "Resource": "arn:aws:s3:::REPLACE_ME-tfstate"
-        },
-        {
-            "Sid": "StateObjects",
-            "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-            "Resource": [
-                "arn:aws:s3:::REPLACE_ME-tfstate/env:/*",
-                "arn:aws:s3:::REPLACE_ME-tfstate/terraform-aws-template/pr-locks/*"
-            ]
-        }
-    ]
-}
-```
-
-```bash
-aws iam put-role-policy \
-  --role-name REPLACE_ME-github-terraform \
-  --policy-name terraform-state \
-  --policy-document file://state.json
-```
-
-### GitHub
-
-Unter Settings → Secrets and variables → Actions → Variables die Variable `AWS_ROLE_ARN` auf die Role-ARN setzen. Das ist kein Secret. Optional `AWS_REGION`, sonst nimmt die Pipeline `eu-central-1`. Optional `EXECUTABLE` mit dem Wert `tofu`.
-
-Lege die Environments `prod` und `staging` an und setze Required reviewers. Liegt dort ebenfalls `AWS_ROLE_ARN`, gilt diese Role nur für das geschützte Apply. Ihre Trust-Policy braucht dann den Subject `repo:ORG/REPO:environment:prod` oder `environment:staging`, und dieselben State-Rechte, weil Apply den State liest und die Sperre löst.
-
-Der Default-Branch bleibt `main`.
-
-### Was jeder Lauf tut
-
-Das Workflow-Recht `id-token: write` stellt das JWT aus. `aws-actions/configure-aws-credentials` tauscht es gegen kurzlebige Credentials der Role aus `vars.AWS_ROLE_ARN`. Danach laufen `scripts/tf` und die Sperre mit diesen Credentials. Ohne Variable oder ohne passenden Subject endet der Lauf an der Anmeldung, bevor Terraform startet.
-
-## Terraform oder OpenTofu
-
-`EXECUTABLE` legt fest, welches Programm `scripts/tf` aufruft. Erlaubt sind `terraform` und `tofu`. Ohne Angabe wird `terraform` verwendet.
-
-```bash
-EXECUTABLE=tofu scripts/tf plan
-```
-
-## Dateien
-
-- `_terraform.tf` — Terraform-Version, Provider, S3-Backend
-- `_providers.tf` — Alle Provider für das Projekt werden hier definiert
-- `_variables.tf` — Variablen
-- `_locals.tf` — gemeinsame Locals und Tags
-- `_outputs.tf` — Outputs
-- `example-s3-bucket.tf` — privater Beispiel-Bucket
-- `environments/<env>.tfvars` — Variablen des Environments
-- `environments/<env>.backend.tfvars` — Backend-Konfiguration
-- `environments/<env>.secrets.tfvars` — optionale Secrets, nicht im Git
-- `environments/<env>.tfplan` — Plan-Datei, nicht im Git
-- `.github/workflows/terraform-commands.yml.template` — Kommentar-Workflow, inaktiv bis die Endung `.template` fehlt
-- `.github/workflows/terraform-preview.yml.template` — Preview-Push, ebenfalls inaktiv
-- `.github/actions/tf-run/` — gemeinsame Schritte für OIDC, Sperre und `scripts/tf`
-
-`bucket`, `key` und `region` stehen in der Backend-tfvars. Der State-Key ist für alle Environments gleich (`terraform-aws-template/terraform.tfstate`). Die Trennung macht der Workspace, zum Beispiel `env:/prod/terraform-aws-template/terraform.tfstate`.
-
-## State-Bucket bootstrapen
-
-Der State-Bucket steht in `_terraform.tf` auskommentiert, mit dem Platzhalter `REPLACE_ME-tfstate`. Derselbe Platzhalter steht in den `*.backend.tfvars`.
-
-1. In `_terraform.tf` den Block `backend "s3"` auskommentieren.
-2. Die Ressource `aws_s3_bucket.tfstate` samt Versionierung, Verschlüsselung und Public-Access-Block einkommentieren und den Bucket-Namen setzen.
-3. Mit lokalem State applyen.
-4. Die Ressource wieder auskommentieren, das Backend aktivieren und `scripts/tf init` ausführen. Terraform fragt nach der Migration; alternativ `terraform init -migrate-state` mit derselben `-backend-config` wie das Skript.
-
-Im normalen Apply bleibt die Ressource auskommentiert, damit nicht jedes Environment den gemeinsamen State-Bucket neu anlegen will.
-
-Bucket-Namen in den `*.tfvars` beginnen mit `REPLACE_ME`. S3 lehnt Großbuchstaben ab, deshalb scheitert ein Apply, bis die Namen ersetzt sind.
-
-## Preview-Environment
+## Preview environment
 
 ```bash
 git checkout develop
@@ -259,6 +135,6 @@ git checkout -b preview/feature123
 scripts/tf init
 ```
 
-Fehlen die Dateien, kopiert `init` die Vorlagen nach `environments/preview-feature123.tfvars` und `environments/preview-feature123.backend.tfvars` und stoppt. Nach dem Anpassen der Werte `init` erneut ausführen, danach `plan` und `apply`.
+If the files are missing, `init` copies the templates to `environments/preview-feature123.tfvars` and `environments/preview-feature123.backend.tfvars` and stops. After you adjust the values, run `init` again, then `plan` and `apply`.
 
-Dieselben Dateien entstehen mit `scripts/tf -e preview-feature123 init`, auch von einem anderen Branch aus.
+The same files are created with `scripts/tf -e preview-feature123 init`, including from another branch.
