@@ -138,3 +138,7 @@ scripts/tf init
 If the files are missing, `init` copies the templates to `environments/preview-feature123.tfvars` and `environments/preview-feature123.backend.tfvars` and stops. After you adjust the values, run `init` again, then `plan` and `apply`.
 
 The same files are created with `scripts/tf -e preview-feature123 init`, including from another branch.
+
+## License
+
+This template is released under the MIT License. The copyright notice and the license text are in [LICENSE.md](LICENSE.md).
