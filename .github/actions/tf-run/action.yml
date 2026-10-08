@@ -30,8 +30,9 @@ inputs:
     description: Region für die AWS-Anmeldung
     required: true
   executable:
-    description: terraform oder tofu
-    required: true
+    description: terraform oder tofu. Leer liest tool aus pipeline.json.
+    required: false
+    default: ""
   github-token:
     description: Token für Kommentare und Artifacts
     required: false
@@ -71,12 +72,39 @@ runs:
           exit 1
         fi
 
+    - name: Tool wählen
+      id: tool
+      shell: bash
+      env:
+        INPUT_EXECUTABLE: ${{ inputs.executable }}
+      run: |
+        if [[ -n "$INPUT_EXECUTABLE" ]]; then
+          tool="$INPUT_EXECUTABLE"
+        else
+          tool=$(bash scripts/pipeline.sh tool)
+        fi
+        case "$tool" in
+          terraform|tofu) ;;
+          *)
+            echo "EXECUTABLE muss terraform oder tofu sein, nicht '$tool'." >&2
+            exit 1
+            ;;
+        esac
+        echo "executable=$tool" >> "$GITHUB_OUTPUT"
+
     - name: Terraform installieren
-      if: inputs.command != 'unlock'
+      if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'terraform' }}
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: "1.10.5"
         terraform_wrapper: false
+
+    - name: OpenTofu installieren
+      if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'tofu' }}
+      uses: opentofu/setup-opentofu@v2
+      with:
+        tofu_version: "1.10.5"
+        tofu_wrapper: false
 
     - name: Bei AWS anmelden
       uses: aws-actions/configure-aws-credentials@v4
@@ -94,7 +122,7 @@ runs:
         HEAD_REF: ${{ inputs.head-ref }}
         TF_WORKSPACE: ${{ inputs.workspace }}
         PR_NUMBER: ${{ inputs.pr }}
-        TF_EXECUTABLE: ${{ inputs.executable }}
+        TF_EXECUTABLE: ${{ steps.tool.outputs.executable }}
         TF_SECRETS_TFVARS: ${{ inputs.secrets-tfvars }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: bash "$RUNNER_TEMP/tf-run/run.sh"

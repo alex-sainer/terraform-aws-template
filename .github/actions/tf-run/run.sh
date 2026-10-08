@@ -14,7 +14,12 @@ cd "$ROOT"
 : "${GITHUB_SERVER_URL:?}"
 : "${GITHUB_REPOSITORY:?}"
 
-export EXECUTABLE="${TF_EXECUTABLE:-terraform}"
+if [[ -n "${TF_EXECUTABLE:-}" ]]; then
+  EXECUTABLE=$TF_EXECUTABLE
+else
+  EXECUTABLE=$(bash "$ROOT/scripts/pipeline.sh" tool)
+fi
+export EXECUTABLE
 case "$EXECUTABLE" in
   terraform | tofu) ;;
   *)
@@ -75,7 +80,7 @@ short_sha() {
 
 resolve_workspace() {
   if [[ "$COMMAND" == "preview" ]]; then
-    bash "$SCRIPT_DIR/workspace.sh" "$HEAD_REF" "$HEAD_REF"
+    bash "$ROOT/scripts/pipeline.sh" preview-workspace "$HEAD_REF"
   else
     printf '%s\n' "${TF_WORKSPACE:?}"
   fi

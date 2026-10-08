@@ -72,6 +72,10 @@ case "$perm" in
     ;;
 esac
 
+ROOT=${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}
+export PIPELINE_LABELS
+PIPELINE_LABELS=$(jq -c '[(.labels // [])[].name]' <<<"$pr_json")
+
 err_file=$(mktemp)
 if ! ws=$(bash "$SCRIPT_DIR/workspace.sh" "$head_ref" "$base_ref" 2>"$err_file"); then
   post "$(cat "$err_file")"
@@ -80,6 +84,7 @@ if ! ws=$(bash "$SCRIPT_DIR/workspace.sh" "$head_ref" "$base_ref" 2>"$err_file")
   exit 1
 fi
 rm -f "$err_file"
+protected=$(bash "$ROOT/scripts/pipeline.sh" protected "$ws")
 
 react "eyes"
 
@@ -89,6 +94,9 @@ react "eyes"
   echo "EOF"
   echo "workspace<<EOF"
   echo "$ws"
+  echo "EOF"
+  echo "protected<<EOF"
+  echo "$protected"
   echo "EOF"
   echo "head_sha<<EOF"
   echo "$head_sha"

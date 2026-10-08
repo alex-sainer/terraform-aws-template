@@ -1,0 +1,490 @@
+#!/usr/bin/env bash
+# Fragt Stages, Branch-Zuordnung, Tool und Preview ab und schreibt pipeline.json.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+PIPELINE="$ROOT/scripts/pipeline.sh"
+RENDER_ONLY=0
+
+if [[ "${1:-}" == "--render" ]]; then
+  RENDER_ONLY=1
+elif [[ $# -gt 0 ]]; then
+  echo "Aufruf: scripts/setup [--render]" >&2
+  exit 2
+fi
+
+if [[ ! -r /dev/tty && "$RENDER_ONLY" -eq 0 ]]; then
+  echo "scripts/setup braucht ein Terminal. Zum neu Schreiben der Workflows: scripts/setup --render" >&2
+  exit 1
+fi
+
+bash "$PIPELINE" tool >/dev/null
+
+prompt() {
+  local __var=$1
+  local text=$2
+  local default=$3
+  local answer
+  if [[ -n "$default" ]]; then
+    read -r -p "$text ($default): " answer </dev/tty
+    answer=${answer:-$default}
+  else
+    read -r -p "$text: " answer </dev/tty
+  fi
+  printf -v "$__var" '%s' "$answer"
+}
+
+ask_protected() {
+  local default=$1
+  local hint="j/N"
+  local answer
+  if [[ "$default" == "true" ]]; then
+    hint="J/n"
+  fi
+  while true; do
+    read -r -p "Geschützt, mit GitHub-Freigabe [$hint]: " answer </dev/tty
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')
+    if [[ -z "$answer" ]]; then
+      printf '%s' "$default"
+      return 0
+    fi
+    case "$answer" in
+      j | ja | y | yes | true)
+        printf 'true'
+        return 0
+        ;;
+      n | nein | no | false)
+        printf 'false'
+        return 0
+        ;;
+      *)
+        echo "Bitte j oder n." >&2
+        ;;
+    esac
+  done
+}
+
+ask_stage() {
+  local name_default=${1:-}
+  local branch_default=${2:-}
+  local protected_default=${3:-false}
+  local name branch protected
+  prompt name "Stage-Name" "$name_default"
+  prompt branch "Branch" "$branch_default"
+  protected=$(ask_protected "$protected_default")
+  STAGE_NAME=$name
+  STAGE_BRANCH=$branch
+  STAGE_PROTECTED=$protected
+}
+
+load_stages() {
+  ENV_NAMES=()
+  ENV_BRANCHES=()
+  ENV_PROTECTED=()
+  while IFS=$'\t' read -r name branch protected; do
+    [[ -n "$name" ]] || continue
+    ENV_NAMES+=("$name")
+    ENV_BRANCHES+=("$branch")
+    ENV_PROTECTED+=("$protected")
+  done < <(jq -r '.environments[] | [.name, .branch, (.protected | tostring)] | @tsv' "$ROOT/pipeline.json")
+}
+
+show_stages() {
+  local i prot
+  echo "Stages:"
+  if [[ ${#ENV_NAMES[@]} -eq 0 ]]; then
+    echo "  (keine)"
+    return 0
+  fi
+  for i in "${!ENV_NAMES[@]}"; do
+    prot="ungeschützt"
+    if [[ "${ENV_PROTECTED[$i]}" == "true" ]]; then
+      prot="geschützt"
+    fi
+    printf '  %d. %s  Branch %s  %s\n' "$((i + 1))" "${ENV_NAMES[$i]}" "${ENV_BRANCHES[$i]}" "$prot"
+  done
+}
+
+drop_stage() {
+  local idx=$1
+  local i
+  local names=() branches=() protected=()
+  for i in "${!ENV_NAMES[@]}"; do
+    if [[ "$i" -eq "$idx" ]]; then
+      continue
+    fi
+    names+=("${ENV_NAMES[$i]}")
+    branches+=("${ENV_BRANCHES[$i]}")
+    protected+=("${ENV_PROTECTED[$i]}")
+  done
+  if [[ ${#names[@]} -eq 0 ]]; then
+    ENV_NAMES=()
+    ENV_BRANCHES=()
+    ENV_PROTECTED=()
+  else
+    ENV_NAMES=("${names[@]}")
+    ENV_BRANCHES=("${branches[@]}")
+    ENV_PROTECTED=("${protected[@]}")
+  fi
+}
+
+edit_stages() {
+  local cmd arg idx
+  while true; do
+    echo
+    show_stages
+    echo
+    read -r -p "Enter behält die Liste, a hinzufügen, d <Nr> löschen, e <Nr> ändern: " cmd arg </dev/tty
+    case "$cmd" in
+      "")
+        return 0
+        ;;
+      a)
+        ask_stage "" "" false
+        ENV_NAMES+=("$STAGE_NAME")
+        ENV_BRANCHES+=("$STAGE_BRANCH")
+        ENV_PROTECTED+=("$STAGE_PROTECTED")
+        ;;
+      d)
+        if [[ ! "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" -lt 1 ]] || [[ "$arg" -gt ${#ENV_NAMES[@]} ]]; then
+          echo "Keine Stage mit Nummer '$arg'." >&2
+          continue
+        fi
+        drop_stage "$((arg - 1))"
+        ;;
+      e)
+        if [[ ! "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" -lt 1 ]] || [[ "$arg" -gt ${#ENV_NAMES[@]} ]]; then
+          echo "Keine Stage mit Nummer '$arg'." >&2
+          continue
+        fi
+        idx=$((arg - 1))
+        ask_stage "${ENV_NAMES[$idx]}" "${ENV_BRANCHES[$idx]}" "${ENV_PROTECTED[$idx]}"
+        ENV_NAMES[$idx]=$STAGE_NAME
+        ENV_BRANCHES[$idx]=$STAGE_BRANCH
+        ENV_PROTECTED[$idx]=$STAGE_PROTECTED
+        ;;
+      *)
+        echo "Unbekannt: $cmd" >&2
+        ;;
+    esac
+  done
+}
+
+write_config() {
+  local dest=$1
+  local envs='[]'
+  local i
+  if [[ ${#ENV_NAMES[@]} -gt 0 ]]; then
+    for i in "${!ENV_NAMES[@]}"; do
+      envs=$(jq -c \
+        --arg name "${ENV_NAMES[$i]}" \
+        --arg branch "${ENV_BRANCHES[$i]}" \
+        --argjson protected "${ENV_PROTECTED[$i]}" \
+        '. + [{name: $name, branch: $branch, protected: $protected}]' <<<"$envs")
+    done
+  fi
+  jq -n \
+    --arg tool "$TOOL" \
+    --arg mode "$PREVIEW_MODE" \
+    --arg prefix "$PREVIEW_PREFIX" \
+    --arg suffix "$PREVIEW_SUFFIX" \
+    --arg label "$PREVIEW_LABEL" \
+    --argjson environments "$envs" \
+    '{
+      tool: $tool,
+      environments: $environments,
+      preview: {mode: $mode, prefix: $prefix, suffix: $suffix, label: $label}
+    }' >"$dest"
+}
+
+preview_job() {
+  local ref=$1
+  local head_ref=$2
+  local pr=${3:-}
+  cat <<EOF
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./.github/actions/tf-run
+        with:
+          command: preview
+          ref: ${ref}
+          head-ref: ${head_ref}
+EOF
+  if [[ -n "$pr" ]]; then
+    printf '          pr: %s\n' "$pr"
+  fi
+  cat <<'EOF'
+          role-arn: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          executable: ${{ vars.EXECUTABLE }}
+          github-token: ${{ github.token }}
+          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
+EOF
+}
+
+write_preview_workflow() {
+  local dest=$1
+  local header=$2
+  local mode pattern body
+  mode=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
+  {
+    if [[ -n "$header" ]]; then
+      printf '%s\n' "$header"
+    fi
+    echo "name: Terraform preview"
+    echo
+    case "$mode" in
+      prefix)
+        pattern="$(jq -r '.preview.prefix' "$ROOT/pipeline.json")"
+        pattern="${pattern%/}/**"
+        cat <<EOF
+on:
+  push:
+    branches:
+      - "${pattern}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf-preview-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+EOF
+        preview_job '${{ github.sha }}' '${{ github.ref_name }}'
+        ;;
+      suffix)
+        pattern="$(jq -r '.preview.suffix' "$ROOT/pipeline.json")"
+        pattern="**/*${pattern}"
+        cat <<EOF
+on:
+  push:
+    branches:
+      - "${pattern}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf-preview-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+EOF
+        preview_job '${{ github.sha }}' '${{ github.ref_name }}'
+        ;;
+      label)
+        local label
+        label=$(jq -r '.preview.label' "$ROOT/pipeline.json")
+        cat <<EOF
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf-preview-\${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == '${label}') ||
+        (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, '${label}'))
+      )
+EOF
+        preview_job '${{ github.event.pull_request.head.sha }}' '${{ github.head_ref }}' '${{ github.event.pull_request.number }}'
+        ;;
+    esac
+  } >"$dest"
+}
+
+ensure_env_files() {
+  local name region project src backend_src candidate base
+  region="eu-central-1"
+  project="terraform-aws-template"
+  src=""
+  for candidate in environments/*.tfvars; do
+    [[ -f "$candidate" ]] || continue
+    base=$(basename "$candidate")
+    [[ "$base" == *.backend.tfvars || "$base" == *.secrets.tfvars ]] && continue
+    base=${base%.tfvars}
+    [[ "$base" == preview-* ]] && continue
+    src=$candidate
+    break
+  done
+  if [[ -n "$src" ]]; then
+    region=$(sed -n 's/^aws_region[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$src" | head -n 1)
+    project=$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$src" | head -n 1)
+    region=${region:-eu-central-1}
+    project=${project:-terraform-aws-template}
+  fi
+  backend_src=""
+  for candidate in environments/*.backend.tfvars; do
+    [[ -f "$candidate" ]] || continue
+    backend_src=$candidate
+    break
+  done
+  if [[ -z "$backend_src" && -f environments/preview.backend.tfvars.example ]]; then
+    backend_src=environments/preview.backend.tfvars.example
+  fi
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if [[ ! -f "environments/${name}.tfvars" ]]; then
+      cat >"environments/${name}.tfvars" <<EOF
+aws_region          = "${region}"
+project             = "${project}"
+example_bucket_name = "REPLACE_ME-${name}-example"
+EOF
+      echo "Angelegt: environments/${name}.tfvars"
+    fi
+    if [[ ! -f "environments/${name}.backend.tfvars" ]]; then
+      if [[ -z "$backend_src" ]]; then
+        echo "Kein Backend-Beispiel für environments/${name}.backend.tfvars." >&2
+        exit 1
+      fi
+      cp "$backend_src" "environments/${name}.backend.tfvars"
+      echo "Angelegt: environments/${name}.backend.tfvars"
+    fi
+  done < <(jq -r '.environments[].name' "$ROOT/pipeline.json")
+}
+
+warn_leftovers() {
+  local f base known
+  known=$(jq -r '.environments[].name' "$ROOT/pipeline.json")
+  for f in environments/*.tfvars; do
+    [[ -f "$f" ]] || continue
+    base=$(basename "$f")
+    [[ "$base" == *.backend.tfvars || "$base" == *.secrets.tfvars ]] && continue
+    base=${base%.tfvars}
+    [[ "$base" == preview-* ]] && continue
+    if ! grep -qx "$base" <<<"$known"; then
+      echo "Hinweis: $f gehört zu keiner Stage. Die Datei bleibt liegen."
+    fi
+  done
+}
+
+print_manual() {
+  local mode prefix suffix label name
+  mode=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
+  echo
+  echo "Noch manuell in GitHub und AWS:"
+  echo "GitHub Environments mit Required reviewers:"
+  if ! jq -e '.environments[] | select(.protected == true)' "$ROOT/pipeline.json" >/dev/null; then
+    echo "  (keine geschützte Stage)"
+  else
+    jq -r '.environments[] | select(.protected == true) | "  - \(.name)"' "$ROOT/pipeline.json"
+  fi
+  echo "OIDC-Subjects, ORG/REPO und den Default-Branch ersetzen:"
+  echo "  - repo:ORG/REPO:ref:refs/heads/<default-branch>"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    echo "  - repo:ORG/REPO:environment:${name}"
+  done < <(jq -r '.environments[] | select(.protected == true) | .name' "$ROOT/pipeline.json")
+  case "$mode" in
+    prefix)
+      prefix=$(jq -r '.preview.prefix' "$ROOT/pipeline.json")
+      echo "  - repo:ORG/REPO:ref:refs/heads/${prefix}*"
+      ;;
+    suffix)
+      suffix=$(jq -r '.preview.suffix' "$ROOT/pipeline.json")
+      echo "  - repo:ORG/REPO:ref:refs/heads/*${suffix}"
+      ;;
+    label)
+      label=$(jq -r '.preview.label' "$ROOT/pipeline.json")
+      echo "  - repo:ORG/REPO:pull_request"
+      echo "Label-Modus: das Label '${label}' am Pull Request startet die Preview."
+      ;;
+    off)
+      echo "Preview ist aus. .github/workflows/terraform-preview.yml wird nicht ausgeführt."
+      echo "Die Vorlage .template nicht aktivieren, solange preview.mode off ist."
+      ;;
+  esac
+  echo "Das Tool steht in pipeline.json. vars.EXECUTABLE überschreibt es nur, wenn die Variable gesetzt ist."
+}
+
+apply_files() {
+  local mode header
+  ensure_env_files
+  warn_leftovers
+  mode=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
+  header="# Vorlage. GitHub führt diese Datei nicht aus.
+# Im abgeleiteten Repository die Endung .template entfernen.
+# scripts/setup schreibt den Auslöser aus pipeline.json neu."
+  if [[ "$mode" == "off" ]]; then
+    if [[ -f .github/workflows/terraform-preview.yml ]]; then
+      rm -f .github/workflows/terraform-preview.yml
+      echo "Entfernt: .github/workflows/terraform-preview.yml"
+    fi
+  else
+    write_preview_workflow .github/workflows/terraform-preview.yml.template "$header"
+    echo "Geschrieben: .github/workflows/terraform-preview.yml.template"
+    if [[ -f .github/workflows/terraform-preview.yml ]]; then
+      write_preview_workflow .github/workflows/terraform-preview.yml ""
+      echo "Geschrieben: .github/workflows/terraform-preview.yml"
+    fi
+  fi
+  print_manual
+}
+
+if [[ "$RENDER_ONLY" -eq 1 ]]; then
+  PIPELINE_CONFIG="$ROOT/pipeline.json" bash "$PIPELINE" check
+  apply_files
+  exit 0
+fi
+
+TOOL=$(jq -r '.tool' "$ROOT/pipeline.json")
+PREVIEW_MODE=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
+PREVIEW_PREFIX=$(jq -r '.preview.prefix' "$ROOT/pipeline.json")
+PREVIEW_SUFFIX=$(jq -r '.preview.suffix' "$ROOT/pipeline.json")
+PREVIEW_LABEL=$(jq -r '.preview.label' "$ROOT/pipeline.json")
+load_stages
+
+prompt TOOL "Tool [terraform/tofu]" "$TOOL"
+prompt PREVIEW_MODE "Preview-Modus [off/prefix/suffix/label]" "$PREVIEW_MODE"
+case "$PREVIEW_MODE" in
+  off) ;;
+  prefix)
+    prompt PREVIEW_PREFIX "Branch-Prefix, mit abschließendem /" "$PREVIEW_PREFIX"
+    ;;
+  suffix)
+    prompt PREVIEW_SUFFIX "Branch-Suffix" "$PREVIEW_SUFFIX"
+    ;;
+  label)
+    prompt PREVIEW_LABEL "Label am Pull Request" "$PREVIEW_LABEL"
+    ;;
+  *)
+    echo "Preview-Modus '$PREVIEW_MODE' ist ungültig." >&2
+    exit 1
+    ;;
+esac
+
+while true; do
+  edit_stages
+  tmp=$(mktemp)
+  write_config "$tmp"
+  if PIPELINE_CONFIG="$tmp" bash "$PIPELINE" check; then
+    mv "$tmp" "$ROOT/pipeline.json"
+    break
+  fi
+  rm -f "$tmp"
+  echo "Die Config ist ungültig. Bitte die Angaben korrigieren." >&2
+done
+
+echo "Geschrieben: pipeline.json"
+apply_files

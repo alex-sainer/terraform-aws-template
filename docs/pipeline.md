@@ -2,7 +2,7 @@
 
 Optional setup on top of the branch mapping in the [README](../README.md). The pipeline runs `scripts/tf` in GitHub Actions. It signs in to AWS with OIDC, so the repository holds no long-lived access key.
 
-The repository, the choice of Terraform or OpenTofu, and the state bucket come from the README setup. This page covers the workflows, the IAM role, and the GitHub settings.
+Stages, the branch mapping, the preview mode, and the choice of Terraform or OpenTofu live in [`pipeline.json`](../pipeline.json) at the repository root. The same file is what `scripts/tf` reads locally. This page covers the workflows, the IAM role, and the GitHub settings. `scripts/setup` writes the file and the preview workflow trigger. `scripts/setup --render` refreshes the trigger from the current file.
 
 ## Enable the workflows
 
@@ -15,15 +15,22 @@ git mv .github/workflows/terraform-preview.yml.template .github/workflows/terraf
 
 In this template the `.template` suffixes stay. GitHub only starts files that end in `.yml` or `.yaml`.
 
-GitHub reads comments from the default branch `main`. A push to `preview/<name>` reads the workflow from that branch. The default branch stays `main`.
+GitHub reads comments from the default branch. A push preview reads the workflow from the preview branch. A label preview reads the workflow from the default branch, because `pull_request` uses that copy. The shipped default branch is `main`.
 
 ## How a run picks the workspace
 
-The code is always the commit of the pull request or of the push. The pipeline passes `-e` to `scripts/tf` with the workspace chosen as follows:
+The code is always the commit of the pull request or of the push. Comment commands read `pipeline.json` from the default branch, so a mapping change in a pull request applies after the merge. The pipeline passes `-e` to `scripts/tf` with the workspace from that file:
 
-- If the head starts with `preview/<name>`, that branch applies. `preview/feature123` becomes `preview-feature123`, even when the pull request targets `develop`.
-- Otherwise the target branch applies: a feature branch into `develop` hits `dev`, `develop` into `staging` hits `staging`, and `staging` into `main` hits `prod`.
-- An unknown target branch that is not `main`, `develop`, `staging`, or `preview/<name>` stops the run.
+- If the head matches the preview rule, that preview applies, even when the pull request targets another stage.
+- Otherwise the target branch applies. With the shipped file, a feature branch into `develop` hits `dev`, `develop` into `staging` hits `staging`, and `staging` into `main` hits `prod`.
+- An unknown target branch stops the run.
+
+`preview.mode` is one of:
+
+- `prefix` — head `preview/<name>` becomes workspace `preview-<name>`. One path segment after the prefix. This is the shipped mode.
+- `suffix` — a branch that ends with the suffix, such as `feature/foo-preview`, becomes `preview-feature-foo`. `/` in the remaining branch becomes `-`.
+- `label` — a pull request that carries the configured label uses the head branch the same way: `feature/foo` becomes `preview-feature-foo`. `/tf plan`, `/tf apply`, and `/tf unlock` follow that label. Locally there is no label, so `scripts/tf` needs `-e`.
+- `off` — no preview. The setup removes an active preview workflow if one is present.
 
 ## Comments
 
@@ -33,15 +40,17 @@ Comments on a pull request, exact and with write access to the repository:
 - `/tf apply` applies exactly that artifact. A new commit needs a new plan.
 - `/tf unlock` releases the lock without applying. The saved plan is no longer valid afterwards.
 
-Forks are excluded. Apply on `prod` and `staging` waits for approval of the GitHub environment with the same name. Plan and unlock do not wait. `dev` and `preview-*` do not have this pause.
+Forks are excluded. Apply waits for approval when the stage in `pipeline.json` has `protected: true`. The GitHub environment has the workspace name. Plan and unlock do not wait. With the shipped file that pause is `prod` and `staging`. `dev` and `preview-*` do not have it.
 
 ## Lock
 
 At most one pull request holds the lock per workspace. The lock lives in the state bucket beside the state key. For the key `terraform-aws-template/terraform.tfstate`, that is `terraform-aws-template/pr-locks/<workspace>.json`. `/tf plan` creates it. A second pull request against the same workspace gets no plan, and a comment with the link to the pull request that holds the lock. `/tf apply` runs only for the pull request and the commit recorded in the lock, and releases it afterwards. If the plan fails, the lock is released. If apply fails, the lock stays.
 
-## Preview pushes
+## Preview runs
 
-A push to `preview/<name>` runs init, plan, and apply for `preview-<name>`, without a comment. If the env files are missing on the branch, `init` only creates the templates and the run ends before anything is applied. The files have to be on the branch. If a pull request holds the lock for this workspace, the push stops.
+With `prefix` or `suffix`, a push of a matching branch runs init, plan, and apply, without a comment. With `label`, adding the label runs the same steps, and a later push to that pull request runs them again while the label is still there. Removing the label does not destroy the workspace. If the env files are missing on the branch, `init` only creates the templates and the run ends before anything is applied. The files have to be on the branch. If a pull request holds the lock for this workspace, the run stops.
+
+The workflow `on:` block cannot be read from `pipeline.json` at runtime. `scripts/setup` writes it into `.github/workflows/terraform-preview.yml.template`, and into the active `.yml` when that file already exists.
 
 ## OIDC sign-in
 
@@ -88,7 +97,7 @@ Create a role that trusts only these subjects. `ORG` and `REPO` are the GitHub n
 }
 ```
 
-`repo:ORG/REPO:ref:refs/heads/main` covers `/tf plan`, `/tf unlock`, and apply without a GitHub environment (`dev`, preview comment). A comment workflow runs on the default branch, so the subject is `main`. `environment:prod` and `environment:staging` apply once apply sets the environment; the subject then replaces the branch. `preview/*` covers a push to `preview/<name>`.
+`repo:ORG/REPO:ref:refs/heads/main` covers `/tf plan`, `/tf unlock`, and apply without a GitHub environment (`dev`, and a preview comment). A comment workflow runs on the default branch, so the subject is that branch. `environment:prod` and `environment:staging` apply once apply sets the environment; the subject then replaces the branch. `preview/*` covers a push to `preview/<name>`. After `scripts/setup` changes stages or the preview mode, the script prints the subjects that match the new file. A label preview adds `repo:ORG/REPO:pull_request`, because a `pull_request` workflow does not send the branch as the subject. A suffix preview uses a subject that ends with the suffix.
 
 ```bash
 aws iam create-role \
@@ -132,11 +141,11 @@ aws iam put-role-policy \
 
 ### GitHub
 
-Under Settings → Secrets and variables → Actions → Variables, set the variable `AWS_ROLE_ARN` to the role ARN. This is not a secret. Optionally set `AWS_REGION`; otherwise the pipeline uses `eu-central-1`. Optionally set `EXECUTABLE` to `tofu`.
+Under Settings → Secrets and variables → Actions → Variables, set the variable `AWS_ROLE_ARN` to the role ARN. This is not a secret. Optionally set `AWS_REGION`; otherwise the pipeline uses `eu-central-1`. The tool comes from `tool` in `pipeline.json`. Set the variable `EXECUTABLE` only to override that for Actions; leave it unset otherwise.
 
 If runs need `environments/<env>.secrets.tfvars`, set the secret `TF_SECRETS_TFVARS`. The pipeline writes that value to the secrets file when the secret is set.
 
-Create the environments `prod` and `staging` and set required reviewers. If `AWS_ROLE_ARN` is also set there, that role applies only to the protected apply. Its trust policy then needs the subject `repo:ORG/REPO:environment:prod` or `environment:staging`, and the same state permissions, because apply reads the state and releases the lock.
+Create a GitHub environment for every stage with `protected: true` and set required reviewers. With the shipped file those are `prod` and `staging`. If `AWS_ROLE_ARN` is also set there, that role applies only to the protected apply. Its trust policy then needs the subject `repo:ORG/REPO:environment:<name>`, and the same state permissions, because apply reads the state and releases the lock.
 
 ### What each run does
 

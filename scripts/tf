@@ -4,8 +4,10 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# terraform oder tofu. In der Umgebung überschreibbar: EXECUTABLE=tofu scripts/tf plan
-EXECUTABLE="${EXECUTABLE:-terraform}"
+# Tool aus pipeline.json. Für einen Aufruf: EXECUTABLE=tofu scripts/tf plan
+if [[ -z "${EXECUTABLE:-}" ]]; then
+  EXECUTABLE="$(bash "$ROOT/scripts/pipeline.sh" tool)"
+fi
 case "$EXECUTABLE" in
   terraform|tofu) ;;
   *)
@@ -15,17 +17,14 @@ case "$EXECUTABLE" in
 esac
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: scripts/tf [-e ENV | --env ENV] <init|plan|apply|import> [args...]
 
-Ohne -e/--env kommt das Environment aus dem aktuellen Git-Branch:
-  main            -> prod
-  develop         -> dev
-  staging         -> staging
-  preview/<name>  -> preview-<name>
+Ohne -e/--env kommt das Environment aus dem aktuellen Git-Branch
+und aus pipeline.json. Tool: ${EXECUTABLE}.
+Für einen Aufruf: EXECUTABLE=tofu scripts/tf plan
 
 -e und --env sind gleichwertig und stehen vor dem Subcommand.
-Der Wert ist der Workspace-Name: prod, dev, staging oder preview-<name>.
 
 Beispiele:
   scripts/tf init
@@ -34,8 +33,9 @@ Beispiele:
   scripts/tf --env prod apply
   scripts/tf --env preview-feature123 init
   scripts/tf import aws_s3_bucket.example my-bucket
-  EXECUTABLE=tofu scripts/tf plan
+
 EOF
+  bash "$ROOT/scripts/pipeline.sh" mapping
   exit 2
 }
 
@@ -65,78 +65,27 @@ done
 CMD="$1"
 shift
 
-validate_env() {
-  local name="$1"
-  if [[ "$name" == "default" ]]; then
-    echo "Environment 'default' ist nicht erlaubt." >&2
-    exit 1
-  fi
-  if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
-    echo "Environment '$name' ist ungültig." >&2
-    exit 1
-  fi
-  if [[ "$name" == "prod" || "$name" == "dev" || "$name" == "staging" ]]; then
-    return 0
-  fi
-  if [[ "$name" == preview-* && "$name" != "preview-" ]]; then
-    return 0
-  fi
-  echo "Environment '$name' ist nicht erlaubt. Erlaubt: prod, dev, staging, preview-<name>." >&2
-  exit 1
-}
-
-workspace_from_branch() {
-  local b="$1"
-  case "$b" in
-    main) echo prod ;;
-    develop) echo dev ;;
-    staging) echo staging ;;
-    preview/*)
-      local rest="${b#preview/}"
-      if [[ -z "$rest" || "$rest" == *"/"* ]]; then
-        echo "Branch '$b' ist kein gültiges Preview-Environment." >&2
-        echo "Erlaubt ist genau eine Ebene: preview/<name>." >&2
-        exit 1
-      fi
-      echo "preview-${rest}"
-      ;;
-    HEAD)
-      echo "Detached HEAD. Environment mit -e oder --env angeben." >&2
-      exit 1
-      ;;
-    *)
-      echo "Branch '$b' ist keinem Environment zugeordnet." >&2
-      echo "Erlaubt: main, develop, staging, preview/<name> oder -e/--env." >&2
-      exit 1
-      ;;
-  esac
-}
-
 if ! branch="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
   branch="HEAD"
 fi
 BRANCH_WS=""
-case "$branch" in
-  main) BRANCH_WS="prod" ;;
-  develop) BRANCH_WS="dev" ;;
-  staging) BRANCH_WS="staging" ;;
-  preview/*)
-    rest="${branch#preview/}"
-    if [[ -n "$rest" && "$rest" != *"/"* ]]; then
-      BRANCH_WS="preview-${rest}"
-    fi
-    ;;
-esac
+if [[ "$branch" != "HEAD" ]]; then
+  if BRANCH_WS="$(bash "$ROOT/scripts/pipeline.sh" workspace "$branch" 2>/dev/null)"; then
+    :
+  else
+    BRANCH_WS=""
+  fi
+fi
 
 if [[ -n "$ENV_ARG" ]]; then
   WS="$ENV_ARG"
-  validate_env "$WS"
+  bash "$ROOT/scripts/pipeline.sh" validate "$WS"
   if [[ -n "$BRANCH_WS" && "$BRANCH_WS" != "$WS" ]]; then
     echo "Hinweis: Environment '$WS' weicht vom Branch '$branch' ($BRANCH_WS) ab." >&2
   fi
 else
-  WS="$(workspace_from_branch "$branch")"
-  validate_env "$WS"
+  WS="$(bash "$ROOT/scripts/pipeline.sh" workspace "$branch")"
+  bash "$ROOT/scripts/pipeline.sh" validate "$WS"
 fi
 
 ENV_DIR="$ROOT/environments"

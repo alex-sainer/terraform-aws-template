@@ -71,7 +71,7 @@ jobs:
           comment-id: ${{ github.event.comment.id }}
           role-arn: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
-          executable: ${{ vars.EXECUTABLE || 'terraform' }}
+          executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
           secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
 
@@ -79,7 +79,7 @@ jobs:
     needs: gate
     if: >-
       needs.gate.outputs.command == 'apply' &&
-      (needs.gate.outputs.workspace == 'prod' || needs.gate.outputs.workspace == 'staging')
+      needs.gate.outputs.protected == 'true'
     runs-on: ubuntu-latest
     environment: ${{ needs.gate.outputs.workspace }}
     permissions:
@@ -103,7 +103,7 @@ jobs:
           comment-id: ${{ github.event.comment.id }}
           role-arn: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
-          executable: ${{ vars.EXECUTABLE || 'terraform' }}
+          executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
           secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
 
@@ -111,8 +111,7 @@ jobs:
     needs: gate
     if: >-
       needs.gate.outputs.command == 'apply' &&
-      needs.gate.outputs.workspace != 'prod' &&
-      needs.gate.outputs.workspace != 'staging'
+      needs.gate.outputs.protected != 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -135,7 +134,7 @@ jobs:
           comment-id: ${{ github.event.comment.id }}
           role-arn: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
-          executable: ${{ vars.EXECUTABLE || 'terraform' }}
+          executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
           secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
 
@@ -163,5 +162,5 @@ jobs:
           comment-id: ${{ github.event.comment.id }}
           role-arn: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
-          executable: ${{ vars.EXECUTABLE || 'terraform' }}
+          executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
