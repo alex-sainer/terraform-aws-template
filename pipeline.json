@@ -1,21 +1,16 @@
 {
-    "tool": "tofu",
-    "environments": [
-        {
-            "name": "prod",
-            "branch": "main",
-            "protected": true
-        },
-        {
-            "name": "dev",
-            "branch": "develop",
-            "protected": false
-        }
-    ],
-    "preview": {
-        "mode": "off",
-        "prefix": "preview/",
-        "suffix": "-preview",
-        "label": "preview"
+  "tool": "tofu",
+  "environments": [
+    {
+      "name": "prod",
+      "branch": "main",
+      "protected": true
     }
+  ],
+  "preview": {
+    "mode": "off",
+    "prefix": "preview/",
+    "suffix": "-preview",
+    "label": "preview"
+  }
 }

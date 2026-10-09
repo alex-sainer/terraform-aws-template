@@ -6,7 +6,7 @@ name: Terraform preview
 on:
   push:
     branches:
-      - "preview/**"
+      - "**/*-preview"
 
 permissions:
   contents: read
