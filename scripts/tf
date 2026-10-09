@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# Tool aus pipeline.json. Für einen Aufruf: EXECUTABLE=tofu scripts/tf plan
+# Tool from pipeline.json. For a single run: EXECUTABLE=tofu scripts/tf plan
 if [[ -z "${EXECUTABLE:-}" ]]; then
   EXECUTABLE="$(bash "$ROOT/scripts/pipeline.sh" tool)"
 fi
 case "$EXECUTABLE" in
   terraform|tofu) ;;
   *)
-    echo "EXECUTABLE muss terraform oder tofu sein, nicht '$EXECUTABLE'." >&2
+    echo "EXECUTABLE must be terraform or tofu, not '$EXECUTABLE'." >&2
     exit 1
     ;;
 esac
@@ -20,13 +20,13 @@ usage() {
   cat <<EOF
 Usage: scripts/tf [-e ENV | --env ENV] <init|plan|apply|import> [args...]
 
-Ohne -e/--env kommt das Environment aus dem aktuellen Git-Branch
-und aus pipeline.json. Tool: ${EXECUTABLE}.
-Für einen Aufruf: EXECUTABLE=tofu scripts/tf plan
+Without -e/--env, the environment comes from the current Git branch
+and pipeline.json. Tool: ${EXECUTABLE}.
+For a single run: EXECUTABLE=tofu scripts/tf plan
 
--e und --env sind gleichwertig und stehen vor dem Subcommand.
+-e and --env are equivalent and go before the subcommand.
 
-Beispiele:
+Examples:
   scripts/tf init
   scripts/tf plan
   scripts/tf -e dev plan
@@ -81,7 +81,7 @@ if [[ -n "$ENV_ARG" ]]; then
   WS="$ENV_ARG"
   bash "$ROOT/scripts/pipeline.sh" validate "$WS"
   if [[ -n "$BRANCH_WS" && "$BRANCH_WS" != "$WS" ]]; then
-    echo "Hinweis: Environment '$WS' weicht vom Branch '$branch' ($BRANCH_WS) ab." >&2
+    echo "Note: environment '$WS' differs from branch '$branch' ($BRANCH_WS)." >&2
   fi
 else
   WS="$(bash "$ROOT/scripts/pipeline.sh" workspace "$branch")"
@@ -102,14 +102,14 @@ fi
 require_file() {
   local path="$1"
   if [[ ! -f "$path" ]]; then
-    echo "Fehlt: $path" >&2
+    echo "Missing: $path" >&2
     exit 1
   fi
 }
 
 require_executable() {
   if ! command -v "$EXECUTABLE" >/dev/null 2>&1; then
-    echo "Programm '$EXECUTABLE' wurde nicht gefunden." >&2
+    echo "Program '$EXECUTABLE' was not found." >&2
     exit 1
   fi
 }
@@ -120,8 +120,8 @@ ensure_workspace() {
   require_executable
   current="$("$EXECUTABLE" workspace show)"
   if [[ "$current" != "$WS" ]]; then
-    echo "Aktiver Workspace ist '$current', erwartet '$WS'." >&2
-    echo "Zuerst ausführen: scripts/tf init" >&2
+    echo "Active workspace is '$current', expected '$WS'." >&2
+    echo "Run first: scripts/tf init" >&2
     exit 1
   fi
   export TF_WORKSPACE="$WS"
@@ -136,10 +136,10 @@ case "$CMD" in
       if [[ ! -f "$BACKEND" ]]; then
         cp "$ENV_DIR/preview.backend.tfvars.example" "$BACKEND"
       fi
-      echo "Preview-Dateien angelegt:"
+      echo "Created preview files:"
       echo "  $TFVARS"
       echo "  $BACKEND"
-      echo "Werte anpassen, danach init erneut ausführen."
+      echo "Adjust the values, then run init again."
       exit 0
     fi
     require_file "$BACKEND"
@@ -159,12 +159,12 @@ case "$CMD" in
     ;;
   apply)
     if [[ $# -gt 0 ]]; then
-      echo "apply akzeptiert keine weiteren Argumente und wendet nur $PLAN an." >&2
+      echo "apply takes no further arguments and only applies $PLAN." >&2
       exit 1
     fi
     ensure_workspace
     if [[ ! -f "$PLAN" ]]; then
-      echo "Kein Plan unter $PLAN. Zuerst: scripts/tf plan" >&2
+      echo "No plan at $PLAN. Run first: scripts/tf plan" >&2
       exit 1
     fi
     "$EXECUTABLE" apply -input=false "$PLAN"

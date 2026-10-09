@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Führt init und plan, apply oder unlock für einen Workspace aus.
+# Runs init and plan, apply, or unlock for a workspace.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -23,7 +23,7 @@ export EXECUTABLE
 case "$EXECUTABLE" in
   terraform | tofu) ;;
   *)
-    echo "EXECUTABLE muss terraform oder tofu sein, nicht '$EXECUTABLE'." >&2
+    echo "EXECUTABLE must be terraform or tofu, not '$EXECUTABLE'." >&2
     exit 1
     ;;
 esac
@@ -57,7 +57,7 @@ body = pathlib.Path(bodyfile).read_text(encoding="utf-8", errors="replace").rstr
 limit = 64000
 text = f"### {title}\n\n{body}\n"
 if len(text) > limit:
-    note = "\n\nAusgabe gekürzt. Der vollständige Plan liegt als Workflow-Artifact."
+    note = "\n\nOutput truncated. The full plan is available as a workflow artifact."
     room = limit - len(title) - len(note) - 8
     text = f"### {title}\n\n{body[:max(0, room)]}{note}\n"
 pathlib.Path(dest).write_text(text, encoding="utf-8")
@@ -96,7 +96,7 @@ prepare_lock_env() {
   local ws=$1
   local backend="environments/${ws}.backend.tfvars"
   if [[ ! -f "$backend" ]]; then
-    write_err "Terraform ${COMMAND} (\`${ws}\`)" "Backend-Datei fehlt: \`${backend}\`."
+    write_err "Terraform ${COMMAND} (\`${ws}\`)" "Backend file is missing: \`${backend}\`."
     exit 1
   fi
   local bucket key region key_dir
@@ -104,7 +104,7 @@ prepare_lock_env() {
   key=$(parse_backend "$backend" key)
   region=$(parse_backend "$backend" region)
   if [[ -z "$bucket" || -z "$key" || -z "$region" ]]; then
-    write_err "Terraform ${COMMAND} (\`${ws}\`)" "\`bucket\`, \`key\` oder \`region\` fehlen in \`${backend}\`."
+    write_err "Terraform ${COMMAND} (\`${ws}\`)" "\`bucket\`, \`key\`, or \`region\` is missing in \`${backend}\`."
     exit 1
   fi
   key_dir=$(dirname "$key")
@@ -145,10 +145,10 @@ holder_text() {
   ref=$(jq -r '.ref' "$LOCK_STATE_FILE")
   if [[ -n "$pr" ]]; then
     url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${pr}"
-    printf 'Workspace `%s` ist durch [PR #%s](%s) gesperrt (Commit `%s`, %s).\n\nDieser Lauf hat keinen neuen Plan erzeugt. `/tf unlock` im sperrenden PR gibt die Sperre frei, oder warte auf dessen `/tf apply`.\n' \
+    printf 'Workspace `%s` is locked by [PR #%s](%s) (commit `%s`, %s).\n\nThis run did not create a new plan. Run `/tf unlock` in the locking PR to release it, or wait for its `/tf apply`.\n' \
       "$ws" "$pr" "$url" "$(short_sha "$sha")" "$user"
   else
-    printf 'Workspace `%s` ist durch den Push auf `%s` gesperrt (Commit `%s`, %s).\n\n`/tf unlock` auf dem Pull Request dieses Branches gibt die Sperre frei.\n' \
+    printf 'Workspace `%s` is locked by the push to `%s` (commit `%s`, %s).\n\nRun `/tf unlock` on the pull request of that branch to release it.\n' \
       "$ws" "$ref" "$(short_sha "$sha")" "$user"
   fi
 }
@@ -188,7 +188,7 @@ ensure_preview_files() {
   body=$(mktemp)
   {
     cat "$log"
-    printf '\nDie Dateien müssen im Branch stehen. Dieser Lauf hat nichts angewendet.\n'
+    printf '\nThe files must be committed on the branch. This run applied nothing.\n'
   } >"$body"
   write_md "$ERR_FILE" "Terraform preview (\`${ws}\`)" "$body"
   rm -f "$log" "$body"
@@ -248,7 +248,7 @@ comment_apply() {
   local log=$2
   local body
   body=$(mktemp)
-  fenced_log "$(printf 'Plan für Commit `%s` wurde angewendet.' "$(short_sha "$GIT_SHA")")" "$log" "$body"
+  fenced_log "$(printf 'Plan for commit `%s` was applied.' "$(short_sha "$GIT_SHA")")" "$log" "$body"
   write_md "$OK_FILE" "Terraform apply (\`${ws}\`)" "$body"
   rm -f "$body"
 }
@@ -300,18 +300,18 @@ fail_lock_status() {
       write_err "$title" "$(holder_text "$ws")"
       ;;
     3)
-      write_err "$title" "$(printf 'Für Workspace `%s` läuft bereits ein Apply. Warte das Ende ab oder löse die Sperre mit `/tf unlock`.\n' "$ws")"
+      write_err "$title" "$(printf 'An apply is already running for workspace `%s`. Wait for it to finish, or release the lock with `/tf unlock`.\n' "$ws")"
       ;;
     4)
-      write_err "$title" "$(printf 'Für Workspace `%s` liegt keine Sperre. Zuerst `/tf plan` ausführen.\n' "$ws")"
+      write_err "$title" "$(printf 'There is no lock for workspace `%s`. Run `/tf plan` first.\n' "$ws")"
       ;;
     5)
       local old
       old=$(jq -r '.sha' "$LOCK_STATE_FILE")
-      write_err "$title" "$(printf 'Die Sperre gehört zu Commit `%s`, der Stand ist `%s`. Bitte erneut `/tf plan` ausführen.\n' "$(short_sha "$old")" "$(short_sha "$GIT_SHA")")"
+      write_err "$title" "$(printf 'The lock belongs to commit `%s`, but the current commit is `%s`. Please run `/tf plan` again.\n' "$(short_sha "$old")" "$(short_sha "$GIT_SHA")")"
       ;;
     *)
-      write_err "$title" "Die Workspace-Sperre konnte nicht gesetzt oder geprüft werden."
+      write_err "$title" "The workspace lock could not be set or checked."
       ;;
   esac
   exit 1
@@ -373,7 +373,7 @@ do_apply() {
   keep_lock=1
   if ! download_plan "$ws"; then
     bash "$SCRIPT_DIR/lock.sh" abort-apply || true
-    write_err "Terraform apply (\`${ws}\`)" "$(printf 'Kein gespeicherter Plan für Commit `%s` im Workspace `%s`. Zuerst `/tf plan` ausführen.\n' "$(short_sha "$GIT_SHA")" "$ws")"
+    write_err "Terraform apply (\`${ws}\`)" "$(printf 'No saved plan for commit `%s` in workspace `%s`. Run `/tf plan` first.\n' "$(short_sha "$GIT_SHA")" "$ws")"
     exit 1
   fi
   write_secrets "$ws"
@@ -408,7 +408,7 @@ do_unlock() {
     fail_lock_status "$ws" "$status" "Terraform unlock (\`${ws}\`)"
   fi
   body=$(mktemp)
-  printf 'Sperre für Workspace `%s` ist aufgehoben. Der gespeicherte Plan ist nicht mehr anwendbar.\n' "$ws" >"$body"
+  printf 'The lock for workspace `%s` is released. The saved plan can no longer be applied.\n' "$ws" >"$body"
   write_md "$OK_FILE" "Terraform unlock (\`${ws}\`)" "$body"
   rm -f "$body"
   echo "upload_plan=false" >>"$GITHUB_OUTPUT"
@@ -423,7 +423,7 @@ do_preview() {
     status=$(tr -d '[:space:]' <"$RUNNER_TEMP/tf-lock.rc")
   fi
   if [[ $status -ne 0 ]]; then
-    echo "Workspace ${ws} ist gesperrt. Der Push wird nicht angewendet." >&2
+    echo "Workspace ${ws} is locked. The push is not applied." >&2
     if [[ -f "$LOCK_STATE_FILE" ]]; then
       holder_text "$ws" >&2
     fi
@@ -453,7 +453,7 @@ do_preview() {
   acquired=0
   rm -f "$log"
   echo "upload_plan=false" >>"$GITHUB_OUTPUT"
-  echo "Preview ${ws} wurde angewendet ($(short_sha "$GIT_SHA"))."
+  echo "Preview ${ws} was applied ($(short_sha "$GIT_SHA"))."
 }
 
 ws=$(resolve_workspace)
@@ -471,7 +471,7 @@ case "$COMMAND" in
   unlock) do_unlock "$ws" ;;
   preview) do_preview "$ws" ;;
   *)
-    echo "Unbekannter Befehl: $COMMAND" >&2
+    echo "Unknown command: $COMMAND" >&2
     exit 1
     ;;
 esac

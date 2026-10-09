@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prüft die Auflösung aus pipeline.json ohne Terraform und ohne AWS.
+# Tests the resolution from pipeline.json without Terraform and without AWS.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"

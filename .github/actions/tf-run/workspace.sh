@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Gibt den Workspace für einen Pull Request aus.
-# Argument 1: Head-Branch. Argument 2: Zielbranch.
-# Labels stehen in PIPELINE_LABELS (JSON-Array). Preview gewinnt vor dem Zielbranch.
+# Prints the workspace for a pull request.
+# Argument 1: head branch. Argument 2: target branch.
+# Labels come from PIPELINE_LABELS (JSON array). A preview wins over the target branch.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "Aufruf: workspace.sh <head-ref> <base-ref>" >&2
+  echo "Usage: workspace.sh <head-ref> <base-ref>" >&2
   exit 2
 fi
 

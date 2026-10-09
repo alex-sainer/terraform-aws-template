@@ -14,11 +14,11 @@ terraform {
   }
 }
 
-# TODO: State-Bucket einmalig bootstrapen, danach wieder auskommentieren.
-# 1. backend "s3" auskommentieren
-# 2. diesen Block einkommentieren und den Bucket-Namen setzen
-# 3. apply mit lokalem State
-# 4. Block wieder auskommentieren, Backend aktivieren, init -migrate-state
+# TODO: Bootstrap the state bucket once, then comment this out again.
+# 1. Comment out backend "s3"
+# 2. Uncomment this block and set the bucket name
+# 3. Apply with local state
+# 4. Comment the block out again, enable the backend, run init -migrate-state
 #
 # resource "aws_s3_bucket" "tfstate" {
 #   bucket = "REPLACE_ME-tfstate"

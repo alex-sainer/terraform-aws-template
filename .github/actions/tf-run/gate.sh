@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prüft einen Pull-Request-Kommentar und schreibt die Job-Outputs.
+# Checks a pull request comment and writes the job outputs.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -57,7 +57,7 @@ head_sha=$(jq -r '.head.sha' <<<"$pr_json")
 base_ref=$(jq -r '.base.ref' <<<"$pr_json")
 
 if [[ -z "$head_repo" || "$head_repo" != "$base_repo" ]]; then
-  post "Forks sind ausgeschlossen. /tf plan, /tf apply und /tf unlock laufen nur für Branches dieses Repositories."
+  post "Forks are excluded. /tf plan, /tf apply, and /tf unlock only run for branches of this repository."
   react "-1"
   exit 1
 fi
@@ -66,7 +66,7 @@ perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${COMMENT_USER}/permissi
 case "$perm" in
   admin | write) ;;
   *)
-    post "Nur Personen mit Schreibrecht können /tf plan, /tf apply und /tf unlock auslösen."
+    post "Only people with write access can trigger /tf plan, /tf apply, and /tf unlock."
     react "-1"
     exit 1
     ;;

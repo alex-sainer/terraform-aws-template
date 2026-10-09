@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Schreibt den vorbereiteten Kommentar, nachdem Plan-Artifact und Lauf feststehen.
+# Posts the prepared comment once the plan artifact and the run outcome are known.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -20,11 +20,11 @@ if [[ "$run_outcome" == "success" && "$upload_outcome" != "failure" && -s "$OK_F
 fi
 
 if [[ "$upload_outcome" == "failure" ]]; then
-  printf '### Terraform plan\n\nDer Plan ist gelaufen, das Artifact konnte nicht gespeichert werden. Bitte erneut `/tf plan` ausführen.\n' >"$ERR_FILE"
+  printf '### Terraform plan\n\nThe plan ran, but the artifact could not be saved. Please run `/tf plan` again.\n' >"$ERR_FILE"
 fi
 
 if [[ ! -s "$ERR_FILE" && "$run_outcome" != "success" ]]; then
-  printf '### Terraform\n\nDer Lauf ist vor Terraform fehlgeschlagen. Die Actions-Logs enthalten die Ursache.\n' >"$ERR_FILE"
+  printf '### Terraform\n\nThe run failed before Terraform started. The Actions logs contain the cause.\n' >"$ERR_FILE"
 fi
 
 if [[ -s "$ERR_FILE" ]]; then

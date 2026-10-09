@@ -1,5 +1,5 @@
-# Vorlage. GitHub führt diese Datei nicht aus.
-# Im abgeleiteten Repository die Endung .template entfernen.
+# Template. GitHub does not run this file.
+# In a derived repository, drop the .template extension.
 name: Terraform commands
 
 on:

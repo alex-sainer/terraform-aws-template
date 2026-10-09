@@ -1,9 +1,9 @@
 output "example_bucket_name" {
-  description = "Name des Beispiel-Buckets."
+  description = "Name of the example bucket."
   value       = aws_s3_bucket.example.id
 }
 
 output "environment" {
-  description = "Aktives Environment. Entspricht dem Terraform-Workspace."
+  description = "Active environment. Matches the Terraform workspace."
   value       = local.environment
 }

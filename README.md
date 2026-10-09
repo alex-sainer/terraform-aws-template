@@ -51,7 +51,11 @@ Install Terraform `>= 1.10` or OpenTofu, and set up AWS credentials for the targ
 scripts/setup
 ```
 
-The script starts with a short introduction, then asks which tool to use, what the production environment is called and which branch tracks it, whether to add further environment branches, whether to enable preview environments and in which form, and whether to enable GitHub Actions. It then writes `pipeline.json`. It adds missing `environments/<name>.tfvars` and backend files, and rewrites the preview workflow trigger. When GitHub Actions are enabled, it writes `.github/workflows/terraform-commands.yml` and, if preview is on, `.github/workflows/terraform-preview.yml`. `scripts/setup --render` rewrites the preview trigger from the current file without questions, and refreshes those workflow files when they are already active.
+The script walks through four steps with arrow-key menus: the tool (it shows whether Terraform or OpenTofu is installed), the environments (the production environment and its branch, then keep, edit, or remove each existing one, and add more), preview environments (whether to enable them, then branch prefix, branch suffix, or pull request label, and the concrete value), and GitHub Actions. Invalid input is reported right at the prompt. Before writing, it shows a summary and the list of files it will create, update, or remove, and asks for confirmation. Ctrl+C aborts without changing anything.
+
+On confirmation it writes `pipeline.json`, adds missing `environments/<name>.tfvars` and backend files, and rewrites the preview workflow trigger. When GitHub Actions are enabled, it writes `.github/workflows/terraform-commands.yml` and, if preview is on, `.github/workflows/terraform-preview.yml`. It ends with the next steps, including the OIDC subjects for the IAM role with the repository name and default branch taken from the `origin` remote.
+
+`scripts/setup --render` rewrites the preview trigger from the current file without questions, and refreshes those workflow files when they are already active. `scripts/setup --help` lists the options. Set `NO_COLOR=1` for plain output.
 
 `EXECUTABLE` overrides `tool` for one call. If it is unset, `scripts/tf` uses `pipeline.json`.
 

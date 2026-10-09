@@ -1,6 +1,6 @@
-# Vorlage. GitHub führt diese Datei nicht aus.
-# Im abgeleiteten Repository die Endung .template entfernen.
-# scripts/setup schreibt den Auslöser aus pipeline.json neu.
+# Template. GitHub does not run this file.
+# In a derived repository, drop the .template extension.
+# scripts/setup rewrites the trigger from pipeline.json.
 name: Terraform preview
 
 on:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Schreibt eine Datei als Kommentar in den Pull Request.
-# Aufruf: comment.sh <datei>
+# Posts a file as a comment on the pull request.
+# Usage: comment.sh <file>
 set -euo pipefail
 
 file=${1:?}
@@ -8,7 +8,7 @@ if [[ -z "${PR_NUMBER:-}" || ! -s "$file" ]]; then
   exit 0
 fi
 if [[ -z "${GH_TOKEN:-}" || -z "${GITHUB_REPOSITORY:-}" ]]; then
-  echo "GH_TOKEN oder GITHUB_REPOSITORY fehlt, Kommentar wird nicht geschrieben." >&2
+  echo "GH_TOKEN or GITHUB_REPOSITORY is missing, the comment is not posted." >&2
   exit 1
 fi
 

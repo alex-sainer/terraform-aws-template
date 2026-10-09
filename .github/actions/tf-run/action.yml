@@ -1,78 +1,78 @@
-name: Terraform ausführen
-description: OIDC, Workspace-Sperre und scripts/tf für Plan, Apply, Unlock oder Preview.
+name: Run Terraform
+description: OIDC, workspace lock, and scripts/tf for plan, apply, unlock, or preview.
 
 inputs:
   command:
-    description: plan, apply, unlock oder preview
+    description: plan, apply, unlock, or preview
     required: true
   ref:
-    description: Commit, der ausgecheckt wird
+    description: Commit to check out
     required: true
   workspace:
-    description: Workspace. Bei preview leer, dann kommt er aus head-ref.
+    description: Workspace. Empty for preview, then it comes from head-ref.
     required: false
     default: ""
   head-ref:
-    description: Branch-Name für die Sperre
+    description: Branch name for the lock
     required: true
   pr:
-    description: Pull-Request-Nummer, leer beim Preview-Push
+    description: Pull request number, empty for a preview push
     required: false
     default: ""
   comment-id:
-    description: Kommentar für die Reaktion
+    description: Comment to react to
     required: false
     default: ""
   role-arn:
-    description: IAM-Role für OIDC
+    description: IAM role for OIDC
     required: true
   aws-region:
-    description: Region für die AWS-Anmeldung
+    description: Region for the AWS sign-in
     required: true
   executable:
-    description: terraform oder tofu. Leer liest tool aus pipeline.json.
+    description: terraform or tofu. Empty reads tool from pipeline.json.
     required: false
     default: ""
   github-token:
-    description: Token für Kommentare und Artifacts
+    description: Token for comments and artifacts
     required: false
     default: ""
   secrets-tfvars:
-    description: Inhalt von environments/<env>.secrets.tfvars
+    description: Content of environments/<env>.secrets.tfvars
     required: false
     default: ""
 
 runs:
   using: composite
   steps:
-    - name: Skripte sichern
+    - name: Save scripts
       shell: bash
       run: |
         rm -rf "$RUNNER_TEMP/tf-run"
         cp -a "${{ github.action_path }}" "$RUNNER_TEMP/tf-run"
 
-    - name: Commit auschecken
+    - name: Check out commit
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.ref }}
         fetch-depth: 1
         persist-credentials: false
 
-    - name: Role prüfen
+    - name: Check role
       shell: bash
       env:
         ROLE: ${{ inputs.role-arn }}
         PR_NUMBER: ${{ inputs.pr }}
       run: |
         if [[ -z "$ROLE" ]]; then
-          echo "Variable AWS_ROLE_ARN fehlt." >&2
+          echo "Variable AWS_ROLE_ARN is missing." >&2
           if [[ -n "$PR_NUMBER" ]]; then
-            printf '### Terraform\n\nVariable `AWS_ROLE_ARN` fehlt.\n' > "$RUNNER_TEMP/tf-comment-err.md"
+            printf '### Terraform\n\nVariable `AWS_ROLE_ARN` is missing.\n' > "$RUNNER_TEMP/tf-comment-err.md"
           fi
           exit 1
         fi
 
-    - name: Tool wählen
+    - name: Select tool
       id: tool
       shell: bash
       env:
@@ -86,34 +86,34 @@ runs:
         case "$tool" in
           terraform|tofu) ;;
           *)
-            echo "EXECUTABLE muss terraform oder tofu sein, nicht '$tool'." >&2
+            echo "EXECUTABLE must be terraform or tofu, not '$tool'." >&2
             exit 1
             ;;
         esac
         echo "executable=$tool" >> "$GITHUB_OUTPUT"
 
-    - name: Terraform installieren
+    - name: Install Terraform
       if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'terraform' }}
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: "1.10.5"
         terraform_wrapper: false
 
-    - name: OpenTofu installieren
+    - name: Install OpenTofu
       if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'tofu' }}
       uses: opentofu/setup-opentofu@v2
       with:
         tofu_version: "1.10.5"
         tofu_wrapper: false
 
-    - name: Bei AWS anmelden
+    - name: Sign in to AWS
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ inputs.role-arn }}
         aws-region: ${{ inputs.aws-region }}
         role-session-name: gha-tf-${{ github.run_id }}
 
-    - name: Terraform ausführen
+    - name: Run Terraform
       id: run
       shell: bash
       env:
@@ -127,7 +127,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
       run: bash "$RUNNER_TEMP/tf-run/run.sh"
 
-    - name: Plan speichern
+    - name: Save plan
       id: upload
       if: steps.run.outputs.upload_plan == 'true'
       uses: actions/upload-artifact@v4
@@ -137,7 +137,7 @@ runs:
         retention-days: 14
         if-no-files-found: error
 
-    - name: Sperre lösen, wenn der Plan nicht gespeichert wurde
+    - name: Release lock if the plan was not saved
       if: steps.run.outputs.upload_plan == 'true' && steps.upload.outcome == 'failure'
       shell: bash
       run: |
@@ -147,7 +147,7 @@ runs:
           bash "$RUNNER_TEMP/tf-run/lock.sh" release
         fi
 
-    - name: Pull-Request-Kommentar
+    - name: Pull request comment
       if: always()
       shell: bash
       env:
@@ -157,7 +157,7 @@ runs:
         UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
       run: bash "$RUNNER_TEMP/tf-run/post-comment.sh"
 
-    - name: Reaktion
+    - name: Reaction
       if: always() && inputs.comment-id != ''
       shell: bash
       env:

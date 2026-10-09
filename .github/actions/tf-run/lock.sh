@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sperre pro Workspace im State-Bucket: <state-key-dir>/pr-locks/<workspace>.json
-# Befehle: acquire, begin-apply, finish-apply, abort-apply, release, unlock
+# One lock per workspace in the state bucket: <state-key-dir>/pr-locks/<workspace>.json
+# Commands: acquire, begin-apply, finish-apply, abort-apply, release, unlock
 set -euo pipefail
 
 cmd=${1:?}
@@ -85,7 +85,7 @@ can_unlock() {
   fi
   pr=$(jq -r '.pr // empty' "$file")
   ref=$(jq -r '.ref // empty' "$file")
-  # Ein Preview-PR darf die Sperre eines Pushes auf demselben Branch lösen.
+  # A preview PR may release the lock of a push to the same branch.
   [[ -n "$LOCK_PR" && -z "$pr" && "$ref" == "$LOCK_REF" ]]
 }
 
@@ -165,7 +165,7 @@ delete_match() {
     now=$(current_etag "$meta")
     rm -f "$state" "$meta"
     if [[ "$now" != "$etag" ]]; then
-      echo "Die Sperre wurde inzwischen geändert und bleibt bestehen." >&2
+      echo "The lock was changed in the meantime and stays in place." >&2
       return 1
     fi
     aws_s3 delete-object --bucket "$LOCK_BUCKET" --key "$LOCK_KEY" >/dev/null
@@ -173,7 +173,7 @@ delete_match() {
     return 0
   fi
   if grep -q -E 'PreconditionFailed|412' "$err"; then
-    echo "Die Sperre wurde inzwischen geändert und bleibt bestehen." >&2
+    echo "The lock was changed in the meantime and stays in place." >&2
     rm -f "$err"
     return 1
   fi
@@ -211,7 +211,7 @@ case "$cmd" in
     read_status=$?
     set -e
     if [[ $read_status -ne 0 ]]; then
-      echo "Sperre konnte nicht gelesen werden." >&2
+      echo "The lock could not be read." >&2
       exit 1
     fi
     applying=$(jq -r '.applying // false' "$state")
@@ -219,7 +219,7 @@ case "$cmd" in
     if same_owner "$state"; then
       if [[ "$applying" == "true" ]]; then
         holder_message "$state"
-        echo "Für diesen Workspace läuft bereits ein Apply." >&2
+        echo "An apply is already running for this workspace." >&2
         exit 3
       fi
       write_body false "$body"
@@ -239,7 +239,7 @@ case "$cmd" in
     read_status=$?
     set -e
     if [[ $read_status -eq 1 ]]; then
-      echo "Keine Sperre. Zuerst /tf plan ausführen." >&2
+      echo "No lock. Run /tf plan first." >&2
       exit 4
     fi
     if [[ $read_status -ne 0 ]]; then
@@ -254,7 +254,7 @@ case "$cmd" in
     fi
     if [[ "$lock_sha" != "$LOCK_SHA" ]]; then
       holder_message "$state"
-      echo "Commit der Sperre ist $lock_sha, erwartet $LOCK_SHA." >&2
+      echo "The lock is for commit $lock_sha, expected $LOCK_SHA." >&2
       rm -f "$state" "$meta"
       exit 5
     fi
@@ -265,7 +265,7 @@ case "$cmd" in
     ;;
   finish-apply | release)
     if [[ ! -s "$LOCK_ETAG_FILE" ]]; then
-      echo "ETag der Sperre fehlt." >&2
+      echo "The lock ETag is missing." >&2
       exit 1
     fi
     etag=$(tr -d '[:space:]' <"$LOCK_ETAG_FILE")
@@ -283,7 +283,7 @@ case "$cmd" in
       exit 0
     fi
     etag=$(current_etag "$meta")
-    # SHA der bestehenden Sperre behalten, nur applying zurücksetzen.
+    # Keep the SHA of the existing lock, only reset applying.
     LOCK_SHA=$(jq -r '.sha' "$state")
     LOCK_USER=$(jq -r '.user' "$state")
     LOCK_REF=$(jq -r '.ref' "$state")
@@ -301,7 +301,7 @@ case "$cmd" in
     read_status=$?
     set -e
     if [[ $read_status -eq 1 ]]; then
-      echo "Für diesen Workspace liegt keine Sperre." >&2
+      echo "There is no lock for this workspace." >&2
       exit 4
     fi
     if [[ $read_status -ne 0 ]]; then
@@ -318,7 +318,7 @@ case "$cmd" in
     rm -f "$state" "$meta"
     ;;
   *)
-    echo "Unbekannter Befehl: $cmd" >&2
+    echo "Unknown command: $cmd" >&2
     exit 2
     ;;
 esac

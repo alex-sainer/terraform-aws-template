@@ -1,14 +1,14 @@
 variable "aws_region" {
-  description = "AWS-Region für den Provider."
+  description = "AWS region for the provider."
   type        = string
 }
 
 variable "project" {
-  description = "Projektname. Wird in den gemeinsamen Tags verwendet."
+  description = "Project name. Used in the common tags."
   type        = string
 }
 
 variable "example_bucket_name" {
-  description = "Global eindeutiger Name des Beispiel-Buckets. Muss den S3-Namensregeln entsprechen."
+  description = "Globally unique name of the example bucket. Must follow the S3 naming rules."
   type        = string
 }

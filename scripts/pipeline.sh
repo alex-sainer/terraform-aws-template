@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Liest pipeline.json und löst Tool, Workspace und Freigabe auf.
+# Reads pipeline.json and resolves the tool, workspace, and approval.
 set -euo pipefail
 
 require_jq() {
@@ -7,7 +7,7 @@ require_jq() {
     return 0
   fi
   cat <<'EOF' >&2
-jq fehlt. pipeline.json wird damit gelesen.
+jq is missing. It is needed to read pipeline.json.
 macOS:         brew install jq
 Debian/Ubuntu: sudo apt-get install jq
 EOF
@@ -27,7 +27,7 @@ fi
 CONFIG=${PIPELINE_CONFIG:-$ROOT/pipeline.json}
 
 if [[ ! -f "$CONFIG" ]]; then
-  echo "Fehlt: $CONFIG" >&2
+  echo "Missing: $CONFIG" >&2
   exit 1
 fi
 
@@ -68,8 +68,8 @@ stage_for_branch() {
   jq -r --arg b "$b" '[.environments[] | select(.branch == $b) | .name] | first // empty' "$CONFIG"
 }
 
-# stdout: Workspace bei Treffer.
-# Exit 2: kein Preview. Exit 1: Preview, aber ungültig.
+# stdout: the workspace on a match.
+# Exit 2: not a preview. Exit 1: a preview, but invalid.
 try_preview() {
   local ref=$1
   local mode prefix suffix label rest slug labels ws
@@ -83,8 +83,8 @@ try_preview() {
       [[ "$ref" == "$prefix"* ]] || return 2
       rest=${ref#"$prefix"}
       if [[ -z "$rest" || "$rest" == *"/"* ]]; then
-        echo "Branch '$ref' ist kein gültiges Preview-Environment." >&2
-        echo "Erlaubt ist genau eine Ebene nach '${prefix}'." >&2
+        echo "Branch '$ref' is not a valid preview environment." >&2
+        echo "Exactly one level after '${prefix}' is allowed." >&2
         return 1
       fi
       slug=$rest
@@ -95,7 +95,7 @@ try_preview() {
       rest=${ref%"$suffix"}
       rest=${rest%/}
       if [[ -z "$rest" ]]; then
-        echo "Branch '$ref' ist kein gültiges Preview-Environment." >&2
+        echo "Branch '$ref' is not a valid preview environment." >&2
         return 1
       fi
       slug=${rest//\//-}
@@ -104,26 +104,26 @@ try_preview() {
       label=$(preview_label)
       labels=${PIPELINE_LABELS:-[]}
       if ! jq -e . >/dev/null <<<"$labels"; then
-        echo "PIPELINE_LABELS ist kein JSON." >&2
+        echo "PIPELINE_LABELS is not valid JSON." >&2
         return 1
       fi
       if ! jq -e --arg l "$label" 'index($l) != null' >/dev/null <<<"$labels"; then
         return 2
       fi
       if [[ -z "$ref" ]]; then
-        echo "Branch '$ref' ist kein gültiges Preview-Environment." >&2
+        echo "Branch '$ref' is not a valid preview environment." >&2
         return 1
       fi
       slug=${ref//\//-}
       ;;
     *)
-      echo "preview.mode '$mode' ist ungültig." >&2
+      echo "preview.mode '$mode' is invalid." >&2
       return 1
       ;;
   esac
   ws="preview-${slug}"
   if ! valid_workspace_name "$ws" || [[ "$slug" == "" ]]; then
-    echo "Environment '$ws' ist ungültig." >&2
+    echo "Environment '$ws' is invalid." >&2
     return 1
   fi
   printf '%s\n' "$ws"
@@ -132,7 +132,7 @@ try_preview() {
 allowed_hint() {
   local mode
   mode=$(preview_mode)
-  echo "Erlaubt:" >&2
+  echo "Allowed:" >&2
   jq -r '.environments[] | "  \(.branch) -> \(.name)"' "$CONFIG" >&2
   case "$mode" in
     prefix)
@@ -142,7 +142,7 @@ allowed_hint() {
       echo "  <branch>$(preview_suffix) -> preview-<slug>" >&2
       ;;
     label)
-      echo "  Label '$(preview_label)' am Pull Request -> preview-<slug>" >&2
+      echo "  Label '$(preview_label)' on a pull request -> preview-<slug>" >&2
       ;;
     off) ;;
   esac
@@ -182,9 +182,9 @@ workspace_of_ref() {
   ws=$(stage_for_branch "$ref")
   if [[ -z "$ws" ]]; then
     if [[ "$ref" == "HEAD" ]]; then
-      echo "Detached HEAD. Environment mit -e oder --env angeben." >&2
+      echo "Detached HEAD. Pass the environment with -e or --env." >&2
     else
-      echo "Branch '$ref' ist keinem Environment zugeordnet." >&2
+      echo "Branch '$ref' is not mapped to an environment." >&2
       allowed_hint
     fi
     return 1
@@ -209,7 +209,7 @@ cmd_workspace_pr() {
   fi
   ws=$(stage_for_branch "$base")
   if [[ -z "$ws" ]]; then
-    echo "Branch '$base' ist keinem Environment zugeordnet." >&2
+    echo "Branch '$base' is not mapped to an environment." >&2
     allowed_hint
     return 1
   fi
@@ -230,7 +230,7 @@ cmd_preview_workspace() {
     printf '%s\n' "$ws"
     return 0
   fi
-  echo "Branch '$ref' ist kein Preview-Environment." >&2
+  echo "Branch '$ref' is not a preview environment." >&2
   allowed_hint
   return 1
 }
@@ -244,11 +244,11 @@ cmd_validate() {
   local name=$1
   local mode
   if [[ "$name" == "default" ]]; then
-    echo "Environment 'default' ist nicht erlaubt." >&2
+    echo "Environment 'default' is not allowed." >&2
     return 1
   fi
   if ! valid_workspace_name "$name"; then
-    echo "Environment '$name' ist ungültig." >&2
+    echo "Environment '$name' is invalid." >&2
     return 1
   fi
   if [[ -n "$(jq -r --arg n "$name" '[.environments[] | select(.name == $n) | .name] | first // empty' "$CONFIG")" ]]; then
@@ -258,7 +258,7 @@ cmd_validate() {
   if [[ "$mode" != "off" && "$name" == preview-* && "$name" != "preview-" ]]; then
     return 0
   fi
-  echo "Environment '$name' ist nicht erlaubt." >&2
+  echo "Environment '$name' is not allowed." >&2
   allowed_hint
   return 1
 }
@@ -271,7 +271,7 @@ cmd_tool() {
       printf '%s\n' "$tool"
       ;;
     *)
-      echo "tool muss terraform oder tofu sein, nicht '$tool'." >&2
+      echo "tool must be terraform or tofu, not '$tool'." >&2
       return 1
       ;;
   esac
@@ -301,54 +301,54 @@ cmd_check() {
   tool=$(tool_value)
   case "$tool" in
     terraform | tofu) ;;
-    *) die "tool muss terraform oder tofu sein, nicht '$tool'." ;;
+    *) die "tool must be terraform or tofu, not '$tool'." ;;
   esac
   mode=$(preview_mode)
   case "$mode" in
     off | prefix | suffix | label) ;;
-    *) die "preview.mode '$mode' ist ungültig. Erlaubt: off, prefix, suffix, label." ;;
+    *) die "preview.mode '$mode' is invalid. Allowed: off, prefix, suffix, label." ;;
   esac
   if [[ "$mode" == "prefix" ]]; then
     prefix=$(preview_prefix)
-    [[ -n "$prefix" && "$prefix" == */ && "$prefix" != *"*"* && "$prefix" != *'"'* ]] || die "preview.prefix muss auf / enden und darf keine Platzhalter enthalten."
+    [[ -n "$prefix" && "$prefix" == */ && "$prefix" != *"*"* && "$prefix" != *'"'* ]] || die "preview.prefix must end with / and must not contain wildcards."
   fi
   if [[ "$mode" == "suffix" ]]; then
     suffix=$(preview_suffix)
-    [[ -n "$suffix" && "$suffix" != *"/"* && "$suffix" != *"*"* && "$suffix" != *'"'* ]] || die "preview.suffix ist ungültig."
+    [[ -n "$suffix" && "$suffix" != *"/"* && "$suffix" != *"*"* && "$suffix" != *'"'* ]] || die "preview.suffix is invalid."
   fi
   if [[ "$mode" == "label" ]]; then
     label=$(preview_label)
-    [[ "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "preview.label ist ungültig."
+    [[ "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "preview.label is invalid."
   fi
   count=$(jq '.environments | length' "$CONFIG")
-  [[ "$count" -ge 1 ]] || die "Mindestens eine Stage ist nötig."
+  [[ "$count" -ge 1 ]] || die "At least one environment is required."
   while IFS=$'\t' read -r name branch protected; do
-    [[ "$name" =~ $NAME_RE ]] || die "Stage-Name '$name' ist ungültig."
-    [[ "$name" != "default" ]] || die "Stage-Name 'default' ist nicht erlaubt."
-    [[ "$name" != preview-* ]] || die "Stage-Name '$name' kollidiert mit Preview-Workspaces."
-    [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "Branch '$branch' ist ungültig."
-    [[ "$branch" != *..* && "$branch" != /* && "$branch" != */ && "$branch" != *//* ]] || die "Branch '$branch' ist ungültig."
-    [[ "$protected" == "true" || "$protected" == "false" ]] || die "protected für '$name' muss true oder false sein."
+    [[ "$name" =~ $NAME_RE ]] || die "Environment name '$name' is invalid."
+    [[ "$name" != "default" ]] || die "Environment name 'default' is not allowed."
+    [[ "$name" != preview-* ]] || die "Environment name '$name' collides with preview workspaces."
+    [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "Branch '$branch' is invalid."
+    [[ "$branch" != *..* && "$branch" != /* && "$branch" != */ && "$branch" != *//* ]] || die "Branch '$branch' is invalid."
+    [[ "$protected" == "true" || "$protected" == "false" ]] || die "protected for '$name' must be true or false."
     if branch_is_preview_pattern "$branch"; then
-      die "Branch '$branch' trifft die Preview-Regel und kann keine Stage sein."
+      die "Branch '$branch' matches the preview rule and cannot be an environment."
     fi
   done < <(jq -r '.environments[] | [.name, .branch, (.protected | tostring)] | @tsv' "$CONFIG")
   names=$(jq -r '.environments[].name' "$CONFIG" | sort | uniq -d)
   branches=$(jq -r '.environments[].branch' "$CONFIG" | sort | uniq -d)
-  [[ -z "$names" ]] || die "Stage-Name mehrfach: $names"
-  [[ -z "$branches" ]] || die "Branch mehrfach: $branches"
+  [[ -z "$names" ]] || die "Duplicate environment name: $names"
+  [[ -z "$branches" ]] || die "Duplicate branch: $branches"
 }
 
 cmd_mapping() {
   local mode
   echo "tool: $(tool_value)"
-  jq -r '.environments[] | "\(.branch) -> \(.name)\(if .protected then " (geschützt)" else "" end)"' "$CONFIG"
+  jq -r '.environments[] | "\(.branch) -> \(.name)\(if .protected then " (protected)" else "" end)"' "$CONFIG"
   mode=$(preview_mode)
   case "$mode" in
-    off) echo "preview: aus" ;;
-    prefix) echo "preview: Prefix $(preview_prefix)<name> -> preview-<name>" ;;
-    suffix) echo "preview: Suffix <branch>$(preview_suffix) -> preview-<slug>" ;;
-    label) echo "preview: Label $(preview_label) am Pull Request" ;;
+    off) echo "preview: off" ;;
+    prefix) echo "preview: prefix $(preview_prefix)<name> -> preview-<name>" ;;
+    suffix) echo "preview: suffix <branch>$(preview_suffix) -> preview-<slug>" ;;
+    label) echo "preview: label $(preview_label) on a pull request" ;;
   esac
 }
 
@@ -357,23 +357,23 @@ case "${1:-}" in
     cmd_tool
     ;;
   protected)
-    [[ $# -eq 2 ]] || die "Aufruf: pipeline.sh protected <workspace>"
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh protected <workspace>"
     cmd_protected "$2"
     ;;
   validate)
-    [[ $# -eq 2 ]] || die "Aufruf: pipeline.sh validate <workspace>"
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh validate <workspace>"
     cmd_validate "$2"
     ;;
   workspace)
-    [[ $# -eq 2 ]] || die "Aufruf: pipeline.sh workspace <ref>"
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh workspace <ref>"
     workspace_of_ref "$2"
     ;;
   workspace-pr)
-    [[ $# -eq 3 ]] || die "Aufruf: pipeline.sh workspace-pr <head> <base>"
+    [[ $# -eq 3 ]] || die "Usage: pipeline.sh workspace-pr <head> <base>"
     cmd_workspace_pr "$2" "$3"
     ;;
   preview-workspace)
-    [[ $# -eq 2 ]] || die "Aufruf: pipeline.sh preview-workspace <ref>"
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh preview-workspace <ref>"
     cmd_preview_workspace "$2"
     ;;
   check)
@@ -383,6 +383,6 @@ case "${1:-}" in
     cmd_mapping
     ;;
   *)
-    die "Aufruf: pipeline.sh <tool|protected|validate|workspace|workspace-pr|preview-workspace|check|mapping>"
+    die "Usage: pipeline.sh <tool|protected|validate|workspace|workspace-pr|preview-workspace|check|mapping>"
     ;;
 esac
