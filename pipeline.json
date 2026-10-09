@@ -1,14 +1,21 @@
 {
-  "tool": "terraform",
-  "environments": [
-    {"name": "dev", "branch": "develop", "protected": false},
-    {"name": "staging", "branch": "staging", "protected": true},
-    {"name": "prod", "branch": "main", "protected": true}
-  ],
-  "preview": {
-    "mode": "prefix",
-    "prefix": "preview/",
-    "suffix": "-preview",
-    "label": "preview"
-  }
+    "tool": "tofu",
+    "environments": [
+        {
+            "name": "prod",
+            "branch": "main",
+            "protected": true
+        },
+        {
+            "name": "dev",
+            "branch": "develop",
+            "protected": false
+        }
+    ],
+    "preview": {
+        "mode": "off",
+        "prefix": "preview/",
+        "suffix": "-preview",
+        "label": "preview"
+    }
 }

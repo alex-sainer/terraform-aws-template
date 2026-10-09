@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fragt Stages, Branch-Zuordnung, Tool und Preview ab und schreibt pipeline.json.
+# Fragt Tool, Umgebungen und Preview ab und schreibt pipeline.json.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -29,6 +29,8 @@ prompt() {
   if [[ -n "$default" ]]; then
     read -r -p "$text ($default): " answer </dev/tty
     answer=${answer:-$default}
+  elif [[ "$text" == *\? ]]; then
+    read -r -p "$text " answer </dev/tty
   else
     read -r -p "$text: " answer </dev/tty
   fi
@@ -65,110 +67,324 @@ ask_protected() {
   done
 }
 
+section() {
+  echo
+  printf '%s\n\n' "$1"
+}
+
+ask_yes() {
+  local text=$1
+  local default=$2
+  local hint="j/N"
+  local answer
+  if [[ "$default" == "true" ]]; then
+    hint="J/n"
+  fi
+  while true; do
+    read -r -p "$text [$hint]: " answer </dev/tty
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')
+    if [[ -z "$answer" ]]; then
+      [[ "$default" == "true" ]]
+      return
+    fi
+    case "$answer" in
+      j | ja | y | yes)
+        return 0
+        ;;
+      n | nein | no)
+        return 1
+        ;;
+      *)
+        echo "Bitte j oder n." >&2
+        ;;
+    esac
+  done
+}
+
+ask_number() {
+  local default=$1
+  local max=$2
+  local answer
+  while true; do
+    read -r -p "Auswahl [$default]: " answer </dev/tty
+    answer=${answer:-$default}
+    if [[ "$answer" =~ ^[0-9]+$ ]] && [[ "$answer" -ge 1 ]] && [[ "$answer" -le "$max" ]]; then
+      printf '%s' "$answer"
+      return 0
+    fi
+    echo "Bitte eine Zahl von 1 bis $max." >&2
+  done
+}
+
+stage_ok() {
+  local name=$1
+  local branch=$2
+  local i
+  local name_re='^[A-Za-z0-9][A-Za-z0-9_-]*$'
+  [[ "$name" =~ $name_re ]] || {
+    echo "Stage-Name '$name' ist ungültig." >&2
+    return 1
+  }
+  [[ "$name" != "default" ]] || {
+    echo "Stage-Name 'default' ist nicht erlaubt." >&2
+    return 1
+  }
+  [[ "$name" != preview-* ]] || {
+    echo "Stage-Name '$name' kollidiert mit Preview-Workspaces." >&2
+    return 1
+  }
+  [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || {
+    echo "Branch '$branch' ist ungültig." >&2
+    return 1
+  }
+  [[ "$branch" != *..* && "$branch" != /* && "$branch" != */ && "$branch" != *//* ]] || {
+    echo "Branch '$branch' ist ungültig." >&2
+    return 1
+  }
+  if [[ ${#ENV_NAMES[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for i in "${!ENV_NAMES[@]}"; do
+    if [[ "${ENV_NAMES[$i]}" == "$name" ]]; then
+      echo "Stage-Name mehrfach: $name" >&2
+      return 1
+    fi
+    if [[ "${ENV_BRANCHES[$i]}" == "$branch" ]]; then
+      echo "Branch mehrfach: $branch" >&2
+      return 1
+    fi
+  done
+}
+
 ask_stage() {
   local name_default=${1:-}
   local branch_default=${2:-}
   local protected_default=${3:-false}
+  local name_prompt="${4:-Welches Environment?}"
+  local branch_prompt="${5:-Welcher Branch?}"
   local name branch protected
-  prompt name "Stage-Name" "$name_default"
-  prompt branch "Branch" "$branch_default"
-  protected=$(ask_protected "$protected_default")
-  STAGE_NAME=$name
-  STAGE_BRANCH=$branch
-  STAGE_PROTECTED=$protected
+  while true; do
+    prompt name "$name_prompt" "$name_default"
+    prompt branch "$branch_prompt" "$branch_default"
+    protected=$(ask_protected "$protected_default")
+    if stage_ok "$name" "$branch"; then
+      ENV_NAMES+=("$name")
+      ENV_BRANCHES+=("$branch")
+      ENV_PROTECTED+=("$protected")
+      return 0
+    fi
+    name_default=$name
+    branch_default=$branch
+    protected_default=$protected
+  done
 }
 
-load_stages() {
-  ENV_NAMES=()
-  ENV_BRANCHES=()
-  ENV_PROTECTED=()
+load_existing() {
+  EXISTING_NAMES=()
+  EXISTING_BRANCHES=()
+  EXISTING_PROTECTED=()
+  local name branch protected
   while IFS=$'\t' read -r name branch protected; do
     [[ -n "$name" ]] || continue
-    ENV_NAMES+=("$name")
-    ENV_BRANCHES+=("$branch")
-    ENV_PROTECTED+=("$protected")
+    EXISTING_NAMES+=("$name")
+    EXISTING_BRANCHES+=("$branch")
+    EXISTING_PROTECTED+=("$protected")
   done < <(jq -r '.environments[] | [.name, .branch, (.protected | tostring)] | @tsv' "$ROOT/pipeline.json")
 }
 
-show_stages() {
-  local i prot
-  echo "Stages:"
-  if [[ ${#ENV_NAMES[@]} -eq 0 ]]; then
-    echo "  (keine)"
+pick_production() {
+  PROD_NAME=prod
+  PROD_BRANCH=main
+  PROD_PROTECTED=true
+  REST_NAMES=()
+  REST_BRANCHES=()
+  REST_PROTECTED=()
+  local i found=-1
+  if [[ ${#EXISTING_NAMES[@]} -eq 0 ]]; then
     return 0
   fi
-  for i in "${!ENV_NAMES[@]}"; do
-    prot="ungeschützt"
-    if [[ "${ENV_PROTECTED[$i]}" == "true" ]]; then
-      prot="geschützt"
+  for i in "${!EXISTING_NAMES[@]}"; do
+    if [[ "${EXISTING_NAMES[$i]}" == "prod" ]]; then
+      found=$i
+      break
     fi
-    printf '  %d. %s  Branch %s  %s\n' "$((i + 1))" "${ENV_NAMES[$i]}" "${ENV_BRANCHES[$i]}" "$prot"
+  done
+  if [[ "$found" -lt 0 ]]; then
+    for i in "${!EXISTING_NAMES[@]}"; do
+      if [[ "${EXISTING_BRANCHES[$i]}" == "main" ]]; then
+        found=$i
+        break
+      fi
+    done
+  fi
+  for i in "${!EXISTING_NAMES[@]}"; do
+    if [[ "$found" -ge 0 && "$i" -eq "$found" ]]; then
+      PROD_NAME=${EXISTING_NAMES[$i]}
+      PROD_BRANCH=${EXISTING_BRANCHES[$i]}
+      PROD_PROTECTED=${EXISTING_PROTECTED[$i]}
+      continue
+    fi
+    REST_NAMES+=("${EXISTING_NAMES[$i]}")
+    REST_BRANCHES+=("${EXISTING_BRANCHES[$i]}")
+    REST_PROTECTED+=("${EXISTING_PROTECTED[$i]}")
   done
 }
 
-drop_stage() {
-  local idx=$1
+collect_environments() {
   local i
-  local names=() branches=() protected=()
-  for i in "${!ENV_NAMES[@]}"; do
-    if [[ "$i" -eq "$idx" ]]; then
-      continue
-    fi
-    names+=("${ENV_NAMES[$i]}")
-    branches+=("${ENV_BRANCHES[$i]}")
-    protected+=("${ENV_PROTECTED[$i]}")
+  ENV_NAMES=()
+  ENV_BRANCHES=()
+  ENV_PROTECTED=()
+  section "Umgebungen"
+  ask_stage "$PROD_NAME" "$PROD_BRANCH" "$PROD_PROTECTED" \
+    "Wie heißt die Produktiv-Umgebung?" \
+    "Welcher Branch bildet sie ab?"
+  if [[ ${#REST_NAMES[@]} -gt 0 ]]; then
+    for i in "${!REST_NAMES[@]}"; do
+      echo
+      if ! ask_yes "${REST_NAMES[$i]} auf Branch ${REST_BRANCHES[$i]} übernehmen?" true; then
+        break
+      fi
+      ask_stage "${REST_NAMES[$i]}" "${REST_BRANCHES[$i]}" "${REST_PROTECTED[$i]}" \
+        "Welches Environment?" \
+        "Welcher Branch?"
+    done
+  fi
+  echo
+  while ask_yes "Möchtest du noch ein Environment-Branch-Tracking hinzufügen?" false; do
+    ask_stage "" "" false "Welches Environment?" "Welcher Branch?"
+    echo
   done
-  if [[ ${#names[@]} -eq 0 ]]; then
-    ENV_NAMES=()
-    ENV_BRANCHES=()
-    ENV_PROTECTED=()
+}
+
+ask_preview() {
+  local enable_default=false
+  local choice default_choice example_branch slug
+  section "Preview"
+  if [[ "$PREVIEW_MODE" != "off" ]]; then
+    enable_default=true
+  fi
+  if ! ask_yes "Möchtest du Preview-Environments aktivieren?" "$enable_default"; then
+    PREVIEW_MODE=off
+    return 0
+  fi
+  echo
+  echo "In welchem Format?"
+  echo
+  echo "  1  Branch-Prefix"
+  echo "     Ein Branch wie ${PREVIEW_PREFIX}feature-123 wird zur Umgebung preview-feature-123."
+  echo "     Genau eine Ebene nach dem Prefix."
+  echo
+  example_branch="feature/foo${PREVIEW_SUFFIX}"
+  slug=${example_branch%"$PREVIEW_SUFFIX"}
+  slug=${slug%/}
+  slug=${slug//\//-}
+  echo "  2  Branch-Suffix"
+  echo "     Ein Branch wie ${example_branch} wird zur Umgebung preview-${slug}."
+  echo
+  echo "  3  Label am Pull Request"
+  echo "     Das Label ${PREVIEW_LABEL} am PR legt die Umgebung aus dem Branch-Namen an."
+  echo "     Lokal gibt es kein Label, dafür -e."
+  echo
+  default_choice=1
+  case "$PREVIEW_MODE" in
+    suffix) default_choice=2 ;;
+    label) default_choice=3 ;;
+  esac
+  choice=$(ask_number "$default_choice" 3)
+  case "$choice" in
+    1)
+      PREVIEW_MODE=prefix
+      prompt PREVIEW_PREFIX "Branch-Prefix, mit abschließendem /" "$PREVIEW_PREFIX"
+      ;;
+    2)
+      PREVIEW_MODE=suffix
+      prompt PREVIEW_SUFFIX "Branch-Suffix" "$PREVIEW_SUFFIX"
+      ;;
+    3)
+      PREVIEW_MODE=label
+      prompt PREVIEW_LABEL "Label am Pull Request" "$PREVIEW_LABEL"
+      ;;
+  esac
+}
+
+show_summary() {
+  local i prot tool_label preview_line
+  section "Zusammenfassung"
+  echo "So wird pipeline.json geschrieben:"
+  echo
+  case "$TOOL" in
+    tofu) tool_label="OpenTofu" ;;
+    *) tool_label="Terraform" ;;
+  esac
+  echo "  Tool: $tool_label"
+  for i in "${!ENV_NAMES[@]}"; do
+    prot=""
+    if [[ "${ENV_PROTECTED[$i]}" == "true" ]]; then
+      prot=" (geschützt)"
+    fi
+    printf '  %s -> %s%s\n' "${ENV_BRANCHES[$i]}" "${ENV_NAMES[$i]}" "$prot"
+  done
+  case "$PREVIEW_MODE" in
+    off)
+      preview_line="aus"
+      ;;
+    prefix)
+      preview_line="Prefix ${PREVIEW_PREFIX}<name> -> preview-<name>"
+      ;;
+    suffix)
+      preview_line="Suffix <branch>${PREVIEW_SUFFIX} -> preview-<slug>"
+      ;;
+    label)
+      preview_line="Label ${PREVIEW_LABEL} am Pull Request"
+      ;;
+  esac
+  echo "  Preview: $preview_line"
+  if [[ "$ACTIONS_ENABLED" == "true" ]]; then
+    echo "  GitHub Actions: an"
   else
-    ENV_NAMES=("${names[@]}")
-    ENV_BRANCHES=("${branches[@]}")
-    ENV_PROTECTED=("${protected[@]}")
+    echo "  GitHub Actions: aus"
+  fi
+  echo
+}
+
+ask_actions() {
+  local default=false
+  section "GitHub Actions"
+  cat <<'EOF'
+Die Pipeline in GitHub. Kommentare /tf plan, /tf apply und /tf unlock
+laufen dann in Actions. Ist Preview an, läuft die Preview-Umgebung mit.
+Die Vorlagen bleiben liegen. Aktivieren legt die .yml-Dateien an,
+die GitHub ausführt.
+
+EOF
+  if [[ "${ACTIONS_ENABLED:-}" == "true" ]]; then
+    default=true
+  elif [[ "${ACTIONS_ENABLED:-}" == "false" ]]; then
+    default=false
+  elif [[ -f .github/workflows/terraform-commands.yml ]]; then
+    default=true
+  fi
+  if ask_yes "Möchtest du GitHub Actions aktivieren?" "$default"; then
+    ACTIONS_ENABLED=true
+  else
+    ACTIONS_ENABLED=false
   fi
 }
 
-edit_stages() {
-  local cmd arg idx
-  while true; do
-    echo
-    show_stages
-    echo
-    read -r -p "Enter behält die Liste, a hinzufügen, d <Nr> löschen, e <Nr> ändern: " cmd arg </dev/tty
-    case "$cmd" in
-      "")
-        return 0
-        ;;
-      a)
-        ask_stage "" "" false
-        ENV_NAMES+=("$STAGE_NAME")
-        ENV_BRANCHES+=("$STAGE_BRANCH")
-        ENV_PROTECTED+=("$STAGE_PROTECTED")
-        ;;
-      d)
-        if [[ ! "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" -lt 1 ]] || [[ "$arg" -gt ${#ENV_NAMES[@]} ]]; then
-          echo "Keine Stage mit Nummer '$arg'." >&2
-          continue
-        fi
-        drop_stage "$((arg - 1))"
-        ;;
-      e)
-        if [[ ! "$arg" =~ ^[0-9]+$ ]] || [[ "$arg" -lt 1 ]] || [[ "$arg" -gt ${#ENV_NAMES[@]} ]]; then
-          echo "Keine Stage mit Nummer '$arg'." >&2
-          continue
-        fi
-        idx=$((arg - 1))
-        ask_stage "${ENV_NAMES[$idx]}" "${ENV_BRANCHES[$idx]}" "${ENV_PROTECTED[$idx]}"
-        ENV_NAMES[$idx]=$STAGE_NAME
-        ENV_BRANCHES[$idx]=$STAGE_BRANCH
-        ENV_PROTECTED[$idx]=$STAGE_PROTECTED
-        ;;
-      *)
-        echo "Unbekannt: $cmd" >&2
-        ;;
-    esac
-  done
+write_commands_workflow() {
+  local src=.github/workflows/terraform-commands.yml.template
+  local dest=.github/workflows/terraform-commands.yml
+  awk 'BEGIN { drop = 1 } drop && /^#/ { next } { drop = 0; print }' "$src" >"$dest"
+  echo "Geschrieben: $dest"
+}
+
+remove_workflow() {
+  local dest=$1
+  if [[ -f "$dest" ]]; then
+    rm -f "$dest"
+    echo "Entfernt: $dest"
+  fi
 }
 
 write_config() {
@@ -411,8 +627,7 @@ print_manual() {
       echo "Label-Modus: das Label '${label}' am Pull Request startet die Preview."
       ;;
     off)
-      echo "Preview ist aus. .github/workflows/terraform-preview.yml wird nicht ausgeführt."
-      echo "Die Vorlage .template nicht aktivieren, solange preview.mode off ist."
+      echo "Preview ist aus. .github/workflows/terraform-preview.yml wird nicht angelegt."
       ;;
   esac
   echo "Das Tool steht in pipeline.json. vars.EXECUTABLE überschreibt es nur, wenn die Variable gesetzt ist."
@@ -423,21 +638,33 @@ apply_files() {
   ensure_env_files
   warn_leftovers
   mode=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
+  if [[ -z "${ACTIONS_ENABLED:-}" ]]; then
+    ACTIONS_ENABLED=false
+    if [[ -f .github/workflows/terraform-commands.yml ]]; then
+      ACTIONS_ENABLED=true
+    fi
+  fi
   header="# Vorlage. GitHub führt diese Datei nicht aus.
 # Im abgeleiteten Repository die Endung .template entfernen.
 # scripts/setup schreibt den Auslöser aus pipeline.json neu."
   if [[ "$mode" == "off" ]]; then
-    if [[ -f .github/workflows/terraform-preview.yml ]]; then
-      rm -f .github/workflows/terraform-preview.yml
-      echo "Entfernt: .github/workflows/terraform-preview.yml"
-    fi
+    remove_workflow .github/workflows/terraform-preview.yml
   else
     write_preview_workflow .github/workflows/terraform-preview.yml.template "$header"
     echo "Geschrieben: .github/workflows/terraform-preview.yml.template"
-    if [[ -f .github/workflows/terraform-preview.yml ]]; then
+    if [[ "$ACTIONS_ENABLED" == "true" ]]; then
       write_preview_workflow .github/workflows/terraform-preview.yml ""
       echo "Geschrieben: .github/workflows/terraform-preview.yml"
+    else
+      remove_workflow .github/workflows/terraform-preview.yml
     fi
+  fi
+  if [[ "$ACTIONS_ENABLED" == "true" ]]; then
+    write_commands_workflow
+    echo "GitHub Actions sind an."
+  else
+    remove_workflow .github/workflows/terraform-commands.yml
+    echo "GitHub Actions sind aus."
   fi
   print_manual
 }
@@ -453,29 +680,44 @@ PREVIEW_MODE=$(jq -r '.preview.mode' "$ROOT/pipeline.json")
 PREVIEW_PREFIX=$(jq -r '.preview.prefix' "$ROOT/pipeline.json")
 PREVIEW_SUFFIX=$(jq -r '.preview.suffix' "$ROOT/pipeline.json")
 PREVIEW_LABEL=$(jq -r '.preview.label' "$ROOT/pipeline.json")
-load_stages
+load_existing
+pick_production
 
-prompt TOOL "Tool [terraform/tofu]" "$TOOL"
-prompt PREVIEW_MODE "Preview-Modus [off/prefix/suffix/label]" "$PREVIEW_MODE"
-case "$PREVIEW_MODE" in
-  off) ;;
-  prefix)
-    prompt PREVIEW_PREFIX "Branch-Prefix, mit abschließendem /" "$PREVIEW_PREFIX"
-    ;;
-  suffix)
-    prompt PREVIEW_SUFFIX "Branch-Suffix" "$PREVIEW_SUFFIX"
-    ;;
-  label)
-    prompt PREVIEW_LABEL "Label am Pull Request" "$PREVIEW_LABEL"
-    ;;
-  *)
-    echo "Preview-Modus '$PREVIEW_MODE' ist ungültig." >&2
-    exit 1
-    ;;
+section "Einleitung"
+cat <<'EOF'
+Dieses Setup schreibt pipeline.json im Projektroot.
+Daraus lesen lokale Befehle und GitHub Actions, welches Tool läuft,
+welche Umgebung zu welchem Branch gehört und ob kurzlebige
+Preview-Umgebungen entstehen.
+
+Enter übernimmt den Wert in Klammern.
+EOF
+
+section "Tool"
+echo "Welches Tool möchtest du nutzen?"
+echo
+echo "  1  Terraform"
+echo "  2  OpenTofu"
+echo
+tool_default=1
+if [[ "$TOOL" == "tofu" ]]; then
+  tool_default=2
+fi
+case "$(ask_number "$tool_default" 2)" in
+  1) TOOL=terraform ;;
+  2) TOOL=tofu ;;
 esac
 
+collect_environments
+
 while true; do
-  edit_stages
+  ask_preview
+  ask_actions
+  show_summary
+  if ! ask_yes "So schreiben?" true; then
+    echo "Nichts geschrieben."
+    exit 0
+  fi
   tmp=$(mktemp)
   write_config "$tmp"
   if PIPELINE_CONFIG="$tmp" bash "$PIPELINE" check; then
@@ -483,7 +725,7 @@ while true; do
     break
   fi
   rm -f "$tmp"
-  echo "Die Config ist ungültig. Bitte die Angaben korrigieren." >&2
+  echo "Die Angaben passen nicht zusammen. Die Preview-Auswahl bitte erneut treffen." >&2
 done
 
 echo "Geschrieben: pipeline.json"

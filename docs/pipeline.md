@@ -2,18 +2,16 @@
 
 Optional setup on top of the branch mapping in the [README](../README.md). The pipeline runs `scripts/tf` in GitHub Actions. It signs in to AWS with OIDC, so the repository holds no long-lived access key.
 
-Stages, the branch mapping, the preview mode, and the choice of Terraform or OpenTofu live in [`pipeline.json`](../pipeline.json) at the repository root. The same file is what `scripts/tf` reads locally. This page covers the workflows, the IAM role, and the GitHub settings. `scripts/setup` writes the file and the preview workflow trigger. `scripts/setup --render` refreshes the trigger from the current file.
+Stages, the branch mapping, the preview mode, and the choice of Terraform or OpenTofu live in [`pipeline.json`](../pipeline.json) at the repository root. The same file is what `scripts/tf` reads locally. This page covers the workflows, the IAM role, and the GitHub settings. `scripts/setup` writes the file, the preview workflow trigger, and the active workflow files when GitHub Actions are enabled. `scripts/setup --render` refreshes the trigger from the current file, and the active workflow files when they are already on.
 
 ## Enable the workflows
 
-The workflows live as templates under `.github/workflows/*.yml.template`. Rename them so GitHub runs them in your repository:
+`scripts/setup` asks whether GitHub Actions should run. Yes writes the files GitHub starts:
 
-```bash
-git mv .github/workflows/terraform-commands.yml.template .github/workflows/terraform-commands.yml
-git mv .github/workflows/terraform-preview.yml.template .github/workflows/terraform-preview.yml
-```
+- `.github/workflows/terraform-commands.yml` for `/tf plan`, `/tf apply`, and `/tf unlock`
+- `.github/workflows/terraform-preview.yml` when preview is not off
 
-In this template the `.template` suffixes stay. GitHub only starts files that end in `.yml` or `.yaml`.
+The `.yml.template` files stay. GitHub ignores them, because it only starts files that end in `.yml` or `.yaml`. No leaves those templates and removes the `.yml` files if they are present. In this template the workflows stay off, so the `.template` suffixes remain and no `.yml` is committed.
 
 GitHub reads comments from the default branch. A push preview reads the workflow from the preview branch. A label preview reads the workflow from the default branch, because `pull_request` uses that copy. The shipped default branch is `main`.
 
@@ -50,7 +48,7 @@ At most one pull request holds the lock per workspace. The lock lives in the sta
 
 With `prefix` or `suffix`, a push of a matching branch runs init, plan, and apply, without a comment. With `label`, adding the label runs the same steps, and a later push to that pull request runs them again while the label is still there. Removing the label does not destroy the workspace. If the env files are missing on the branch, `init` only creates the templates and the run ends before anything is applied. The files have to be on the branch. If a pull request holds the lock for this workspace, the run stops.
 
-The workflow `on:` block cannot be read from `pipeline.json` at runtime. `scripts/setup` writes it into `.github/workflows/terraform-preview.yml.template`, and into the active `.yml` when that file already exists.
+The workflow `on:` block cannot be read from `pipeline.json` at runtime. `scripts/setup` writes it into `.github/workflows/terraform-preview.yml.template`, and into `.github/workflows/terraform-preview.yml` when GitHub Actions are enabled. `scripts/setup --render` refreshes the active `.yml` files when `terraform-commands.yml` is already present.
 
 ## OIDC sign-in
 

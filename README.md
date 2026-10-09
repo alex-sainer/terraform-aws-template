@@ -51,7 +51,7 @@ Install Terraform `>= 1.10` or OpenTofu, and set up AWS credentials for the targ
 scripts/setup
 ```
 
-The script asks for the tool, the stages, and the preview mode, then writes `pipeline.json`. It adds missing `environments/<name>.tfvars` and backend files, and rewrites the preview workflow trigger. `scripts/setup --render` rewrites only the workflow from the current file, without questions.
+The script starts with a short introduction, then asks which tool to use, what the production environment is called and which branch tracks it, whether to add further environment branches, whether to enable preview environments and in which form, and whether to enable GitHub Actions. It then writes `pipeline.json`. It adds missing `environments/<name>.tfvars` and backend files, and rewrites the preview workflow trigger. When GitHub Actions are enabled, it writes `.github/workflows/terraform-commands.yml` and, if preview is on, `.github/workflows/terraform-preview.yml`. `scripts/setup --render` rewrites the preview trigger from the current file without questions, and refreshes those workflow files when they are already active.
 
 `EXECUTABLE` overrides `tool` for one call. If it is unset, `scripts/tf` uses `pipeline.json`.
 
@@ -134,8 +134,8 @@ scripts/tf --env preview-feature123 init
 - `environments/<env>.tfplan` — plan file, not in Git
 - `pipeline.json` — tool, stages, branch mapping, and preview mode, for local runs and GitHub Actions
 - `scripts/setup` — writes `pipeline.json` and the preview workflow trigger
-- `.github/workflows/terraform-commands.yml.template` — comment workflow, inactive until the pipeline setup removes the `.template` suffix
-- `.github/workflows/terraform-preview.yml.template` — preview push, also inactive until then
+- `.github/workflows/terraform-commands.yml.template` — comment workflow. `scripts/setup` writes the `.yml` when GitHub Actions are enabled
+- `.github/workflows/terraform-preview.yml.template` — preview workflow, written the same way when preview is on
 - `.github/actions/tf-run/` — shared steps for OIDC, the lock, and `scripts/tf`
 
 `bucket`, `key`, and `region` live in the backend tfvars. The state key is the same for every environment (`terraform-aws-template/terraform.tfstate`). The workspace does the separation, for example `env:/prod/terraform-aws-template/terraform.tfstate`.
