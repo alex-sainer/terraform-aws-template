@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Actions in the workflows and in the composite action. Pins stay SHAs;
+  # Dependabot updates the SHA and the version comment together.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/tf-run
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # AWS provider in the root and in bootstrap/. The lock files are regenerated
+  # for linux_amd64 and darwin_arm64 after a merge, see README.
+  - package-ecosystem: terraform
+    directories:
+      - /
+      - /bootstrap
+    schedule:
+      interval: weekly

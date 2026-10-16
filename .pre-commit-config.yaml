@@ -1,5 +1,6 @@
 # Install once with `pre-commit install`. Run everything with `pre-commit run --all-files`.
-# The Terraform hooks need terraform or tofu and tflint on PATH; the workflow hook needs jq and rsync.
+# The Terraform hooks need terraform or tofu on PATH (tofu is used when terraform is missing);
+# tflint is downloaded by its hook. The workflow hook needs jq and rsync. See docs/tooling.md.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -22,6 +23,7 @@ repos:
           - --hook-config=--retry-once-with-cleanup=true
       - id: terraform_tflint
         args:
+          - --hook-config=--tool-version=0.64.0
           - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
 
   - repo: https://github.com/shellcheck-py/shellcheck-py

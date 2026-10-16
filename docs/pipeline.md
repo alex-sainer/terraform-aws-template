@@ -12,7 +12,7 @@ Stages, the branch mapping, the preview mode, and the choice of Terraform or Ope
 - `.github/workflows/terraform-cleanup.yml`, which runs when a pull request closes
 - `.github/workflows/terraform-preview.yml` when preview is not off
 
-The `.yml.template` files stay. GitHub ignores them, because it only starts files that end in `.yml` or `.yaml`. No leaves those templates and removes the `.yml` files if they are present. In this template the workflows stay off, so no `.yml` is committed.
+The `.yml.template` files stay. GitHub ignores them, because it only starts files that end in `.yml` or `.yaml`. No leaves those templates and removes the `.yml` files if they are present. In this template the Terraform workflows stay off. The only active workflow is `.github/workflows/ci.yml`, which lints the template itself without AWS access.
 
 GitHub reads comment workflows from the default branch. A push preview reads the workflow from the preview branch. A label preview and the cleanup read it from the pull request.
 

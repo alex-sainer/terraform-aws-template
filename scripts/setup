@@ -702,7 +702,7 @@ render_static_workflow() {
   awk 'BEGIN { drop = 1 } drop && /^#/ { next } { drop = 0; print }' "$1" >"$2"
 }
 
-CHECKOUT_ACTION="actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0"
+CHECKOUT_ACTION="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 
 preview_job() {
   local ref=$1
