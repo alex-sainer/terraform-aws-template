@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as the README or docs/pipeline.md describe.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more of the fields below you fill in, the faster it gets fixed.
+        Remove account IDs, bucket names, and anything else you do not want public from the output.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you run, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - scripts/tf or scripts/pipeline.sh (local run)
+        - scripts/setup
+        - GitHub Actions (/tf plan, /tf apply, preview, cleanup)
+        - Terraform code or bootstrap/
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Tool and version
+      description: Output of `tofu version` or `terraform version`.
+      placeholder: OpenTofu v1.10.5
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and shell
+      placeholder: macOS 15.6, bash 3.2 / Ubuntu 24.04 in GitHub Actions
+    validations:
+      required: true
+  - type: textarea
+    id: pipeline
+    attributes:
+      label: pipeline.json
+      description: Paste the file. It is rendered as JSON automatically.
+      render: json
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command and its full output, or the Actions log of the failing step.
+      render: shell
+    validations:
+      required: true

@@ -1,0 +1,28 @@
+name: Question
+description: Something in the README or docs/pipeline.md is unclear, or you are not sure how to use the template for your case.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome. If the answer turns out to be missing from the docs, the issue becomes a doc fix.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What you read and tried
+      description: Which section of the README or docs did you follow, and where did it stop making sense?
+  - type: dropdown
+    id: experience
+    attributes:
+      label: Your Terraform experience
+      description: Helps pick the right level for the answer and for the doc fix.
+      options:
+        - New to Terraform or OpenTofu
+        - Used it before, new to workspaces or GitHub Actions pipelines
+        - Experienced

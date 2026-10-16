@@ -1,0 +1,29 @@
+name: Feature request
+description: Something the template should do, or do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today? Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: If you have an idea how to solve it, describe it here. Optional.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Who is this for
+      options:
+        - Everyone who uses the template
+        - A specific setup (describe it above)
+        - Repositories already created from the template (needs a migration note)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: What did you try instead, and why was it not enough?
