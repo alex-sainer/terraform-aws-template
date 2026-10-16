@@ -77,8 +77,12 @@ assert_ok "validate dev" bash "$PIPE" validate dev
 assert_ok "check prefix" bash "$PIPE" check
 assert_fail "unknown branch" bash "$PIPE" workspace feature/foo
 assert_fail "nested preview" bash "$PIPE" workspace preview/a/b
+assert_fail "uppercase preview" bash "$PIPE" workspace preview/Feature123
+assert_fail "underscore preview" bash "$PIPE" workspace preview/feature_123
 assert_fail "default env" bash "$PIPE" validate default
 assert_fail "unknown env" bash "$PIPE" validate qa
+assert_fail "uppercase env" bash "$PIPE" validate Prod
+assert_fail "underscore env" bash "$PIPE" validate preview-feature_1
 
 # GitHub environment and secret name
 assert_eq "$(bash "$PIPE" environment prod)" "prod" "environment stage"
@@ -112,6 +116,8 @@ assert_fail "suffix empty segment" bash "$PIPE" workspace feature/-preview
 assert_fail "suffix double hyphen" bash "$PIPE" workspace feature--foo-preview
 assert_fail "suffix segment hyphen" bash "$PIPE" workspace a-/b-preview
 assert_fail "suffix only" bash "$PIPE" workspace -preview
+assert_fail "suffix uppercase" bash "$PIPE" workspace Feature/foo-preview
+assert_fail "suffix underscore" bash "$PIPE" workspace feature_foo-preview
 
 # Label mode
 fixture label
@@ -150,14 +156,20 @@ assert_fail "stage named preview" bash "$PIPE" check
 cat >"$PIPELINE_CONFIG" <<'EOF'
 {
   "tool": "terraform",
-  "environments": [
-    {"name": "qa-1", "branch": "qa", "protected": false},
-    {"name": "qa_1", "branch": "qa2", "protected": false}
-  ],
+  "environments": [{"name": "qa_1", "branch": "qa", "protected": false}],
   "preview": {"mode": "off", "prefix": "preview/", "suffix": "-preview", "label": "preview"}
 }
 EOF
-assert_fail "secret name collision" bash "$PIPE" check
+assert_fail "underscore in stage name" bash "$PIPE" check
+
+cat >"$PIPELINE_CONFIG" <<'EOF'
+{
+  "tool": "terraform",
+  "environments": [{"name": "Staging", "branch": "staging", "protected": false}],
+  "preview": {"mode": "off", "prefix": "preview/", "suffix": "-preview", "label": "preview"}
+}
+EOF
+assert_fail "uppercase in stage name" bash "$PIPE" check
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

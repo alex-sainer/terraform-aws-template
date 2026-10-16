@@ -36,7 +36,10 @@ die() {
   exit 1
 }
 
-NAME_RE='^[A-Za-z0-9][A-Za-z0-9_-]*$'
+# Lowercase letters, digits, and "-": the workspace name ends up in resource
+# names such as S3 buckets, which allow nothing else.
+NAME_RE='^[a-z0-9][a-z0-9-]*$'
+NAME_HINT="Use lowercase letters, digits, and '-'."
 
 valid_workspace_name() {
   local name=$1
@@ -127,7 +130,8 @@ try_preview() {
   esac
   ws="preview-${slug}"
   if ! valid_workspace_name "$ws" || [[ "$slug" == "" ]]; then
-    echo "Environment '$ws' is invalid." >&2
+    echo "Branch '$ref' cannot become a preview environment: '$ws' is not a valid name." >&2
+    echo "$NAME_HINT" >&2
     return 1
   fi
   printf '%s\n' "$ws"
@@ -291,7 +295,7 @@ cmd_validate() {
     return 1
   fi
   if ! valid_workspace_name "$name"; then
-    echo "Environment '$name' is invalid." >&2
+    echo "Environment '$name' is invalid. $NAME_HINT" >&2
     return 1
   fi
   if [[ -n "$(jq -r --arg n "$name" '[.environments[] | select(.name == $n) | .name] | first // empty' "$CONFIG")" ]]; then
@@ -366,7 +370,7 @@ cmd_check() {
   count=$(jq '.environments | length' "$CONFIG")
   [[ "$count" -ge 1 ]] || die "At least one environment is required."
   while IFS=$'\t' read -r name branch protected; do
-    [[ "$name" =~ $NAME_RE ]] || die "Environment name '$name' is invalid."
+    [[ "$name" =~ $NAME_RE ]] || die "Environment name '$name' is invalid. $NAME_HINT"
     [[ "$name" != "default" ]] || die "Environment name 'default' is not allowed."
     [[ "$name" != "preview" && "$name" != preview-* ]] || die "Environment name '$name' collides with preview workspaces."
     [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "Branch '$branch' is invalid."

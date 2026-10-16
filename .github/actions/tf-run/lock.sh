@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # One lock per workspace in the state bucket: <state-key-dir>/pr-locks/<workspace>.json
-# Commands: acquire, begin-apply, finish-apply, abort-apply, release, unlock, unlock-idle
+# Commands: acquire, begin-apply, end-apply, finish-apply, abort-apply, release, unlock, unlock-idle
+#
+# end-apply and abort-apply reset "applying" and keep the lock with its owner.
+# finish-apply and release delete the lock; they are for previews, whose lock
+# belongs to the branch, not to a pull request that stays open.
 set -euo pipefail
 
 cmd=${1:?}
@@ -271,7 +275,7 @@ case "$cmd" in
     etag=$(tr -d '[:space:]' <"$LOCK_ETAG_FILE")
     delete_match "$etag"
     ;;
-  abort-apply)
+  abort-apply | end-apply)
     state=$(mktemp)
     meta=$(mktemp)
     body=$(mktemp)

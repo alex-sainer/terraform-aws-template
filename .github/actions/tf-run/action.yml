@@ -94,18 +94,32 @@ runs:
         esac
         echo "executable=$tool" >> "$GITHUB_OUTPUT"
 
+    # The version comes from .terraform-version in the checked-out commit, so
+    # the pipeline and the developer machines run the same release.
+    - name: Read tool version
+      id: version
+      shell: bash
+      run: |
+        if [[ -f .terraform-version ]]; then
+          version=$(tr -d '[:space:]' < .terraform-version)
+        else
+          echo "::warning::.terraform-version is missing, installing the latest release."
+          version=latest
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Install Terraform
       if: ${{ inputs.command != 'unlock' && inputs.command != 'release' && steps.tool.outputs.executable == 'terraform' }}
       uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
       with:
-        terraform_version: "1.10.5"
+        terraform_version: ${{ steps.version.outputs.version }}
         terraform_wrapper: false
 
     - name: Install OpenTofu
       if: ${{ inputs.command != 'unlock' && inputs.command != 'release' && steps.tool.outputs.executable == 'tofu' }}
       uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
       with:
-        tofu_version: "1.10.5"
+        tofu_version: ${{ steps.version.outputs.version }}
         tofu_wrapper: false
 
     - name: Sign in to AWS

@@ -43,11 +43,15 @@ Comments on a pull request, exact and with write access to the repository:
 
 Forks are excluded.
 
+Apply happens in the pull request, before the merge. Merging deploys nothing. The intended order is `/tf plan`, review, `/tf apply`, merge. If a pull request is merged without `/tf apply`, the branch and the environment drift apart until the next pull request plans against that workspace and shows the difference.
+
 Apply always runs in a GitHub environment: the stage name, or `preview` for every preview. That environment supplies the AWS role for the apply. When the stage has `protected: true` in `pipeline.json`, apply waits for the environment's required reviewers. If that environment has no required reviewers, `/tf apply` refuses to run and says so in the pull request, so a missing GitHub setting can never skip the approval. Plan and unlock do not wait.
 
 ## Lock
 
-At most one pull request holds the lock per workspace. The lock lives in the state bucket beside the state key. For the key `terraform-aws-template/terraform.tfstate`, that is `terraform-aws-template/pr-locks/<workspace>.json`. `/tf plan` creates it. A second pull request against the same workspace gets no plan, and a comment with the link to the pull request that holds the lock. `/tf apply` runs only for the pull request and the commit recorded in the lock, and releases it afterwards. If the plan fails, the lock is released. If apply fails, the lock stays.
+At most one pull request holds the lock per workspace. The lock lives in the state bucket beside the state key. For the key `terraform-aws-template/terraform.tfstate`, that is `terraform-aws-template/pr-locks/<workspace>.json`. `/tf plan` creates it. A second pull request against the same workspace gets no plan, and a comment with the link to the pull request that holds the lock. `/tf apply` runs only for the pull request and the commit recorded in the lock. If the plan fails, the lock is released. If apply fails, the lock stays.
+
+After a successful `/tf apply` the lock stays with the pull request. It is released when the pull request closes, or by `/tf unlock`. The reason: the apply ran the code of the pull request, but the stage branch does not contain it until the merge. If the lock were released at that point, another pull request could plan against the stage branch, see the applied change as something to undo, and apply that. Holding the lock until the merge closes that window. The cost is that an applied pull request that stays open blocks the workspace for everyone else; merge it, or run `/tf unlock` if it is abandoned.
 
 When a pull request closes, merged or not, the cleanup workflow releases its lock and deletes its saved plan. A lock with a running apply stays; release it with `/tf unlock` afterwards.
 

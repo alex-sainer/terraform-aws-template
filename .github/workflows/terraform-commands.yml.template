@@ -17,7 +17,6 @@ jobs:
       startsWith(github.event.comment.body, '/tf')
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
       issues: write
       pull-requests: write

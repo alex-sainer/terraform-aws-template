@@ -131,6 +131,23 @@ ensure_workspace() {
   export TF_WORKSPACE="$WS"
 }
 
+# An apply to a protected environment from a branch that does not belong to it
+# asks for the environment name first. Only in a terminal: the pipeline runs
+# without one and has its own approval through the GitHub environment.
+confirm_protected_apply() {
+  local answer
+  [[ -n "$ENV_ARG" && "$BRANCH_WS" != "$WS" ]] || return 0
+  [[ "$(bash "$ROOT/scripts/pipeline.sh" protected "$WS")" == "true" ]] || return 0
+  [[ -t 0 ]] || return 0
+  echo "Environment '$WS' is protected and does not belong to branch '$branch'." >&2
+  printf "Type '%s' to apply anyway: " "$WS" >&2
+  IFS= read -r answer
+  if [[ "$answer" != "$WS" ]]; then
+    echo "Aborted. Nothing was applied." >&2
+    exit 1
+  fi
+}
+
 case "$CMD" in
   init)
     require_file "$BACKEND"
@@ -158,6 +175,7 @@ case "$CMD" in
       echo "No plan at $PLAN. Run first: scripts/tf plan" >&2
       exit 1
     fi
+    confirm_protected_apply
     "$EXECUTABLE" apply -input=false "$PLAN"
     rm -f "$PLAN"
     ;;

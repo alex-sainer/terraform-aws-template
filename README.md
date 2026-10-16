@@ -120,7 +120,7 @@ scripts/tf --env preview-feature123 init
 
 Arguments after `plan` go to Terraform, for example `-destroy` or `-target`.
 
-`environments/<env>.secrets.tfvars` is passed in automatically once the file exists. It is gitignored. A template lives at `environments/secrets.tfvars.example`. In the pipeline, the repository secret `TF_SECRETS_TFVARS_<ENV>` (for example `TF_SECRETS_TFVARS_PROD`) writes this file when it is set. See [docs/pipeline.md](docs/pipeline.md).
+`environments/<env>.secrets.tfvars` is passed in automatically once the file exists. It is gitignored. A template lives at `environments/secrets.tfvars.example`. In the pipeline, the repository secret `TF_SECRETS_TFVARS_<ENV>` (for example `TF_SECRETS_TFVARS_PROD`) writes this file when it is set. See [docs/pipeline.md](docs/pipeline.md). Declare these variables with `sensitive = true`, otherwise their values show up in the plan output and in the pull request comment.
 
 ## Files
 
@@ -133,7 +133,7 @@ Arguments after `plan` go to Terraform, for example `-destroy` or `-target`.
 - `bootstrap/` — one-time setup of the state bucket, with local state
 - `environments/<env>.tfvars` — variables for the environment
 - `environments/<env>.backend.tfvars` — backend configuration
-- `environments/preview.tfvars`, `environments/preview.backend.tfvars` — shared by all previews
+- `environments/preview.tfvars`, `environments/preview.backend.tfvars` — shared by all previews; `scripts/setup` creates them when previews are turned on
 - `environments/<env>.secrets.tfvars` — optional secrets, not in Git
 - `environments/<env>.tfplan` — plan file, not in Git
 - `pipeline.json` — tool, stages, branch mapping, and preview mode, for local runs and GitHub Actions
@@ -159,7 +159,7 @@ scripts/tf plan
 scripts/tf apply
 ```
 
-All previews share `environments/preview.tfvars` and `environments/preview.backend.tfvars`, so a new preview needs no new files. Because resource names contain the workspace, previews do not collide. A preview that needs its own values can add `environments/preview-<name>.tfvars` or `.backend.tfvars`; those win over the shared files.
+All previews share `environments/preview.tfvars` and `environments/preview.backend.tfvars`, which `scripts/setup` creates when previews are turned on, so a new preview needs no new files. Because resource names contain the workspace, previews do not collide. A preview that needs its own values can add `environments/preview-<name>.tfvars` or `.backend.tfvars`; those win over the shared files.
 
 A suffix `feature/foo-preview` becomes the workspace `preview-feature--foo`: each `/` becomes `--`. Branch path segments must not be empty, start or end with `-`, or contain `--`, so two branches never map to the same workspace. A label on a pull request does not select a workspace locally; use `-e` or `--env`.
 

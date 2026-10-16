@@ -328,7 +328,8 @@ trap abort INT TERM
 # Validation
 # ---------------------------------------------------------------------------
 
-NAME_RE='^[A-Za-z0-9][A-Za-z0-9_-]*$'
+# Same rule as scripts/pipeline.sh: the name ends up in S3 bucket names.
+NAME_RE='^[a-z0-9][a-z0-9-]*$'
 BRANCH_RE='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
 
 ENV_NAMES=()
@@ -342,7 +343,7 @@ valid_stage_name() {
     return 1
   fi
   if ! [[ "$name" =~ $NAME_RE ]]; then
-    echo "Use letters, digits, '-' and '_', starting with a letter or digit."
+    echo "Use lowercase letters, digits, and '-', starting with a letter or digit. The name becomes part of resource names such as S3 buckets."
     return 1
   fi
   if [[ "$name" == "default" ]]; then

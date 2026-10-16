@@ -141,7 +141,7 @@ holder_text() {
   ref=$(jq -r '.ref' "$LOCK_STATE_FILE")
   if [[ -n "$pr" ]]; then
     url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${pr}"
-    printf 'Workspace `%s` is locked by [PR #%s](%s) (commit `%s`, %s).\n\nThis run did not create a new plan. Run `/tf unlock` in the locking PR to release it, or wait for its `/tf apply`. Closing that PR releases the lock too.\n' \
+    printf 'Workspace `%s` is locked by [PR #%s](%s) (commit `%s`, %s).\n\nThis run did not create a new plan. The lock is released when that PR is merged or closed, or by `/tf unlock` in that PR.\n' \
       "$ws" "$pr" "$url" "$(short_sha "$sha")" "$user"
   else
     printf 'Workspace `%s` is locked by the push to `%s` (commit `%s`, %s).\n\nRun `/tf unlock` on the pull request of that branch to release it.\n' \
@@ -332,10 +332,14 @@ do_apply() {
     write_err "$title" "$(cat "$log")"
     exit 1
   fi
-  bash "$SCRIPT_DIR/lock.sh" finish-apply
+  # The lock stays with this pull request until it closes or /tf unlock runs.
+  # Otherwise another pull request could plan and apply against this workspace
+  # before this one is merged and undo the change.
+  bash "$SCRIPT_DIR/lock.sh" end-apply
   acquired=0
+  keep_lock=1
   delete_plan
-  comment_log "$title" "$(printf 'Plan for commit `%s` was applied.' "$(short_sha "$GIT_SHA")")" "$log"
+  comment_log "$title" "$(printf 'Plan for commit `%s` was applied. Workspace `%s` stays locked for this pull request until it is closed or `/tf unlock` runs; merge it now so the next pull request plans against the applied code.' "$(short_sha "$GIT_SHA")" "$ws")" "$log"
 }
 
 do_unlock() {

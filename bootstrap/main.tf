@@ -59,6 +59,29 @@ resource "aws_s3_bucket_versioning" "tfstate" {
   }
 }
 
+# Every state write creates a new version. Old versions are kept for 90 days
+# for recovery and then expire, so the bucket does not grow forever.
+resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.tfstate]
+}
+
 # SSE-S3 avoids a KMS key that would have to exist before the state bucket.
 #trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
