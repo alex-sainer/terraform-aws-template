@@ -8,7 +8,12 @@ variable "project" {
   type        = string
 }
 
-variable "example_bucket_name" {
-  description = "Globally unique name of the example bucket. Must follow the S3 naming rules."
+variable "name_prefix" {
+  description = "Globally unique prefix for resource names, for example acme-shop. The environment is appended, so one value works for every environment."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]*[a-z0-9]$", var.name_prefix))
+    error_message = "name_prefix must use lowercase letters, digits, and '-'. Replace REPLACE_ME in environments/*.tfvars."
+  }
 }

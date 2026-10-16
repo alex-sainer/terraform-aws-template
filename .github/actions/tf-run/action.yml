@@ -1,9 +1,9 @@
 name: Run Terraform
-description: OIDC, workspace lock, and scripts/tf for plan, apply, unlock, or preview.
+description: OIDC, workspace lock, and scripts/tf for plan, apply, unlock, preview, release, or destroy.
 
 inputs:
   command:
-    description: plan, apply, unlock, or preview
+    description: plan, apply, unlock, preview, release, or destroy
     required: true
   ref:
     description: Commit to check out
@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ""
   github-token:
-    description: Token for comments and artifacts
+    description: Token for comments
     required: false
     default: ""
   secrets-tfvars:
@@ -52,7 +52,7 @@ runs:
         cp -a "${{ github.action_path }}" "$RUNNER_TEMP/tf-run"
 
     - name: Check out commit
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         ref: ${{ inputs.ref }}
         fetch-depth: 1
@@ -67,7 +67,7 @@ runs:
         if [[ -z "$ROLE" ]]; then
           echo "Variable AWS_ROLE_ARN is missing." >&2
           if [[ -n "$PR_NUMBER" ]]; then
-            printf '### Terraform\n\nVariable `AWS_ROLE_ARN` is missing.\n' > "$RUNNER_TEMP/tf-comment-err.md"
+            printf '### Terraform\n\nVariable `AWS_ROLE_ARN` is missing for this job (repository or GitHub environment).\n' > "$RUNNER_TEMP/tf-comment-err.md"
           fi
           exit 1
         fi
@@ -93,21 +93,21 @@ runs:
         echo "executable=$tool" >> "$GITHUB_OUTPUT"
 
     - name: Install Terraform
-      if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'terraform' }}
-      uses: hashicorp/setup-terraform@v3
+      if: ${{ inputs.command != 'unlock' && inputs.command != 'release' && steps.tool.outputs.executable == 'terraform' }}
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
       with:
         terraform_version: "1.10.5"
         terraform_wrapper: false
 
     - name: Install OpenTofu
-      if: ${{ inputs.command != 'unlock' && steps.tool.outputs.executable == 'tofu' }}
-      uses: opentofu/setup-opentofu@v2
+      if: ${{ inputs.command != 'unlock' && inputs.command != 'release' && steps.tool.outputs.executable == 'tofu' }}
+      uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
       with:
         tofu_version: "1.10.5"
         tofu_wrapper: false
 
     - name: Sign in to AWS
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
       with:
         role-to-assume: ${{ inputs.role-arn }}
         aws-region: ${{ inputs.aws-region }}
@@ -127,26 +127,6 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
       run: bash "$RUNNER_TEMP/tf-run/run.sh"
 
-    - name: Save plan
-      id: upload
-      if: steps.run.outputs.upload_plan == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ steps.run.outputs.artifact_name }}
-        path: ${{ steps.run.outputs.plan_file }}
-        retention-days: 14
-        if-no-files-found: error
-
-    - name: Release lock if the plan was not saved
-      if: steps.run.outputs.upload_plan == 'true' && steps.upload.outcome == 'failure'
-      shell: bash
-      run: |
-        if [[ -f "$RUNNER_TEMP/tf-lock-held.env" ]]; then
-          # shellcheck disable=SC1091
-          source "$RUNNER_TEMP/tf-lock-held.env"
-          bash "$RUNNER_TEMP/tf-run/lock.sh" release
-        fi
-
     - name: Pull request comment
       if: always()
       shell: bash
@@ -154,7 +134,6 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ inputs.pr }}
         RUN_OUTCOME: ${{ steps.run.outcome }}
-        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
       run: bash "$RUNNER_TEMP/tf-run/post-comment.sh"
 
     - name: Reaction
@@ -164,10 +143,9 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         COMMENT_ID: ${{ inputs.comment-id }}
         RUN_OUTCOME: ${{ steps.run.outcome }}
-        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
       run: |
         content="-1"
-        if [[ "$RUN_OUTCOME" == "success" && "$UPLOAD_OUTCOME" != "failure" ]]; then
+        if [[ "$RUN_OUTCOME" == "success" ]]; then
           content="+1"
         fi
         gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \

@@ -1,0 +1,5 @@
+rules:
+  # The workflows check out the default branch and load ./.github/actions/tf-run from it.
+  # The $/ form would load the action from the workflow commit instead, for example the pull request.
+  self-repository:
+    disable: true

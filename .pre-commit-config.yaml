@@ -1,0 +1,56 @@
+# Install once with `pre-commit install`. Run everything with `pre-commit run --all-files`.
+# The Terraform hooks need terraform or tofu and tflint on PATH; the workflow hook needs jq and rsync.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.2
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+        args:
+          - --hook-config=--retry-once-with-cleanup=true
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.14.1-1
+    hooks:
+      - id: shfmt
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: lint-workflows
+        name: actionlint and zizmor
+        entry: scripts/lint-workflows.sh
+        language: python
+        additional_dependencies: [actionlint-py==1.7.12.25, zizmor==1.30.1]
+        pass_filenames: false
+        files: ^(\.github/|scripts/setup$|pipeline\.json$)
+      - id: pipeline-test
+        name: pipeline mapping tests
+        entry: scripts/pipeline-test.sh
+        language: system
+        pass_filenames: false
+        files: ^(scripts/|pipeline\.json$)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One lock per workspace in the state bucket: <state-key-dir>/pr-locks/<workspace>.json
-# Commands: acquire, begin-apply, finish-apply, abort-apply, release, unlock
+# Commands: acquire, begin-apply, finish-apply, abort-apply, release, unlock, unlock-idle
 set -euo pipefail
 
 cmd=${1:?}
@@ -293,7 +293,7 @@ case "$cmd" in
     put_match "$body" "$etag"
     rm -f "$state" "$meta" "$body"
     ;;
-  unlock)
+  unlock | unlock-idle)
     state=$(mktemp)
     meta=$(mktemp)
     set +e
@@ -311,6 +311,12 @@ case "$cmd" in
       holder_message "$state"
       rm -f "$state" "$meta"
       exit 2
+    fi
+    if [[ "$cmd" == "unlock-idle" && "$(jq -r '.applying // false' "$state")" == "true" ]]; then
+      holder_message "$state"
+      echo "An apply is running. The lock stays in place." >&2
+      rm -f "$state" "$meta"
+      exit 3
     fi
     etag=$(current_etag "$meta")
     printf '%s' "$etag" >"$LOCK_ETAG_FILE"

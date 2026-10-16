@@ -1,0 +1,99 @@
+# Template. GitHub does not run this file.
+# In a derived repository, drop the .template extension.
+name: Terraform cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      workspace: ${{ steps.resolve.outputs.workspace }}
+      secret_name: ${{ steps.resolve.outputs.secret_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - id: resolve
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PIPELINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if ws=$(bash scripts/pipeline.sh workspace-pr "$HEAD_REF" "$BASE_REF"); then
+            echo "workspace=$ws" >> "$GITHUB_OUTPUT"
+            echo "secret_name=$(bash scripts/pipeline.sh secret-name "$ws")" >> "$GITHUB_OUTPUT"
+          else
+            echo "No workspace for this pull request. Nothing to clean up."
+          fi
+
+  release-lock:
+    needs: resolve
+    if: needs.resolve.outputs.workspace != '' && !startsWith(needs.resolve.outputs.workspace, 'preview-')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: tf-pr-${{ github.event.pull_request.number }}-change
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./.github/actions/tf-run
+        with:
+          command: release
+          ref: ${{ github.event.pull_request.base.sha }}
+          workspace: ${{ needs.resolve.outputs.workspace }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
+          pr: ${{ github.event.pull_request.number }}
+          role-arn: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          executable: ${{ vars.EXECUTABLE }}
+          github-token: ${{ github.token }}
+
+  destroy-preview:
+    needs: resolve
+    if: startsWith(needs.resolve.outputs.workspace, 'preview-')
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: tf-pr-${{ github.event.pull_request.number }}-change
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./.github/actions/tf-run
+        with:
+          command: destroy
+          ref: ${{ github.event.pull_request.head.sha }}
+          workspace: ${{ needs.resolve.outputs.workspace }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
+          pr: ${{ github.event.pull_request.number }}
+          role-arn: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          executable: ${{ vars.EXECUTABLE }}
+          github-token: ${{ github.token }}
+          # The secret name depends on the workspace, so it is looked up by name.
+          secrets-tfvars: ${{ secrets[needs.resolve.outputs.secret_name] }} # zizmor: ignore[overprovisioned-secrets]

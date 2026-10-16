@@ -1,0 +1,2 @@
+# Single quotes around `...` and ${{ ... }} are intentional: Markdown for pull request comments and GitHub expressions.
+disable=SC2016

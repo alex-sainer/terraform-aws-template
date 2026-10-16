@@ -6,7 +6,7 @@ name: Terraform preview
 on:
   push:
     branches:
-      - "**/*-preview"
+      - "preview/**"
 
 permissions:
   contents: read
@@ -18,11 +18,12 @@ concurrency:
 jobs:
   apply:
     runs-on: ubuntu-latest
+    environment: preview
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -35,4 +36,4 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
           executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
-          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
+          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS_PREVIEW }}

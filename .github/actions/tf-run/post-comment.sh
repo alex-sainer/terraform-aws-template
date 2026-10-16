@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Posts the prepared comment once the plan artifact and the run outcome are known.
+# Posts the prepared comment once the run outcome is known.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -12,15 +12,10 @@ if [[ -z "${PR_NUMBER:-}" ]]; then
 fi
 
 run_outcome=${RUN_OUTCOME:-failure}
-upload_outcome=${UPLOAD_OUTCOME:-skipped}
 
-if [[ "$run_outcome" == "success" && "$upload_outcome" != "failure" && -s "$OK_FILE" ]]; then
+if [[ "$run_outcome" == "success" && -s "$OK_FILE" ]]; then
   bash "$SCRIPT_DIR/comment.sh" "$OK_FILE"
   exit 0
-fi
-
-if [[ "$upload_outcome" == "failure" ]]; then
-  printf '### Terraform plan\n\nThe plan ran, but the artifact could not be saved. Please run `/tf plan` again.\n' >"$ERR_FILE"
 fi
 
 if [[ ! -s "$ERR_FILE" && "$run_outcome" != "success" ]]; then

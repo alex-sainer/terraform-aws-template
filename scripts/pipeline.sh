@@ -68,6 +68,19 @@ stage_for_branch() {
   jq -r --arg b "$b" '[.environments[] | select(.branch == $b) | .name] | first // empty' "$CONFIG"
 }
 
+# "/" becomes "--". Segments must not be empty, start or end with "-", or
+# contain "--", so that two different branches never share a workspace.
+branch_slug() {
+  local ref=$1
+  if [[ -z "$ref" || "$ref" == /* || "$ref" == */ || "$ref" == *//* ||
+    "$ref" == *--* || "$ref" == -* || "$ref" == *- || "$ref" == *-/* || "$ref" == */-* ]]; then
+    echo "Branch '$ref' cannot become a preview environment." >&2
+    echo "Path segments must not be empty, start or end with '-', or contain '--'." >&2
+    return 1
+  fi
+  printf '%s\n' "${ref//\//--}"
+}
+
 # stdout: the workspace on a match.
 # Exit 2: not a preview. Exit 1: a preview, but invalid.
 try_preview() {
@@ -93,12 +106,7 @@ try_preview() {
       suffix=$(preview_suffix)
       [[ -n "$suffix" && "$ref" == *"$suffix" ]] || return 2
       rest=${ref%"$suffix"}
-      rest=${rest%/}
-      if [[ -z "$rest" ]]; then
-        echo "Branch '$ref' is not a valid preview environment." >&2
-        return 1
-      fi
-      slug=${rest//\//-}
+      slug=$(branch_slug "$rest") || return 1
       ;;
     label)
       label=$(preview_label)
@@ -110,11 +118,7 @@ try_preview() {
       if ! jq -e --arg l "$label" 'index($l) != null' >/dev/null <<<"$labels"; then
         return 2
       fi
-      if [[ -z "$ref" ]]; then
-        echo "Branch '$ref' is not a valid preview environment." >&2
-        return 1
-      fi
-      slug=${ref//\//-}
+      slug=$(branch_slug "$ref") || return 1
       ;;
     *)
       echo "preview.mode '$mode' is invalid." >&2
@@ -240,6 +244,45 @@ cmd_protected() {
   jq -r --arg n "$name" '([.environments[] | select(.name == $n) | .protected] | first) // false' "$CONFIG"
 }
 
+# GitHub environment for a workspace. All previews share "preview".
+cmd_environment() {
+  local name=$1
+  if [[ "$name" == preview-* ]]; then
+    printf 'preview\n'
+  else
+    printf '%s\n' "$name"
+  fi
+}
+
+secret_name_for() {
+  local env=$1
+  env=$(printf '%s' "$env" | tr '[:lower:]-' '[:upper:]_')
+  printf 'TF_SECRETS_TFVARS_%s\n' "$env"
+}
+
+cmd_secret_name() {
+  secret_name_for "$(cmd_environment "$1")"
+}
+
+# Path of an env file, relative to the root. Previews fall back to the
+# shared preview.<kind> file when no workspace-specific file exists.
+cmd_env_file() {
+  local name=$1 kind=$2 ext own shared
+  case "$kind" in
+    tfvars) ext=tfvars ;;
+    backend) ext=backend.tfvars ;;
+    secrets) ext=secrets.tfvars ;;
+    *) die "Kind must be tfvars, backend, or secrets, not '$kind'." ;;
+  esac
+  own="environments/${name}.${ext}"
+  shared="environments/preview.${ext}"
+  if [[ "$name" == preview-* && ! -f "$ROOT/$own" && -f "$ROOT/$shared" ]]; then
+    printf '%s\n' "$shared"
+  else
+    printf '%s\n' "$own"
+  fi
+}
+
 cmd_validate() {
   local name=$1
   local mode
@@ -297,7 +340,7 @@ branch_is_preview_pattern() {
 }
 
 cmd_check() {
-  local tool mode prefix suffix label count names branches name branch protected
+  local tool mode prefix suffix label count names branches secrets name branch protected
   tool=$(tool_value)
   case "$tool" in
     terraform | tofu) ;;
@@ -325,7 +368,7 @@ cmd_check() {
   while IFS=$'\t' read -r name branch protected; do
     [[ "$name" =~ $NAME_RE ]] || die "Environment name '$name' is invalid."
     [[ "$name" != "default" ]] || die "Environment name 'default' is not allowed."
-    [[ "$name" != preview-* ]] || die "Environment name '$name' collides with preview workspaces."
+    [[ "$name" != "preview" && "$name" != preview-* ]] || die "Environment name '$name' collides with preview workspaces."
     [[ "$branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || die "Branch '$branch' is invalid."
     [[ "$branch" != *..* && "$branch" != /* && "$branch" != */ && "$branch" != *//* ]] || die "Branch '$branch' is invalid."
     [[ "$protected" == "true" || "$protected" == "false" ]] || die "protected for '$name' must be true or false."
@@ -337,6 +380,8 @@ cmd_check() {
   branches=$(jq -r '.environments[].branch' "$CONFIG" | sort | uniq -d)
   [[ -z "$names" ]] || die "Duplicate environment name: $names"
   [[ -z "$branches" ]] || die "Duplicate branch: $branches"
+  secrets=$(jq -r '.environments[].name' "$CONFIG" | while IFS= read -r name; do secret_name_for "$name"; done | sort | uniq -d)
+  [[ -z "$secrets" ]] || die "Environment names map to the same secret: $secrets"
 }
 
 cmd_mapping() {
@@ -359,6 +404,18 @@ case "${1:-}" in
   protected)
     [[ $# -eq 2 ]] || die "Usage: pipeline.sh protected <workspace>"
     cmd_protected "$2"
+    ;;
+  environment)
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh environment <workspace>"
+    cmd_environment "$2"
+    ;;
+  secret-name)
+    [[ $# -eq 2 ]] || die "Usage: pipeline.sh secret-name <workspace>"
+    cmd_secret_name "$2"
+    ;;
+  env-file)
+    [[ $# -eq 3 ]] || die "Usage: pipeline.sh env-file <workspace> <tfvars|backend|secrets>"
+    cmd_env_file "$2" "$3"
     ;;
   validate)
     [[ $# -eq 2 ]] || die "Usage: pipeline.sh validate <workspace>"
@@ -383,6 +440,6 @@ case "${1:-}" in
     cmd_mapping
     ;;
   *)
-    die "Usage: pipeline.sh <tool|protected|validate|workspace|workspace-pr|preview-workspace|check|mapping>"
+    die "Usage: pipeline.sh <tool|protected|environment|secret-name|env-file|validate|workspace|workspace-pr|preview-workspace|check|mapping>"
     ;;
 esac

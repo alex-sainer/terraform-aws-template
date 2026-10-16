@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: tf-pr-${{ github.event.issue.number }}-${{ startsWith(github.event.comment.body, '/tf plan') && 'plan' || 'keep' }}
-  cancel-in-progress: ${{ startsWith(github.event.comment.body, '/tf plan') }}
-
 jobs:
   gate:
     if: >-
@@ -21,18 +17,21 @@ jobs:
       startsWith(github.event.comment.body, '/tf')
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       issues: write
       pull-requests: write
     outputs:
       command: ${{ steps.gate.outputs.command }}
       workspace: ${{ steps.gate.outputs.workspace }}
+      environment: ${{ steps.gate.outputs.environment }}
+      secret_name: ${{ steps.gate.outputs.secret_name }}
       head_sha: ${{ steps.gate.outputs.head_sha }}
       head_ref: ${{ steps.gate.outputs.head_ref }}
       base_ref: ${{ steps.gate.outputs.base_ref }}
       pr: ${{ steps.gate.outputs.pr }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -50,14 +49,16 @@ jobs:
     needs: gate
     if: needs.gate.outputs.command == 'plan'
     runs-on: ubuntu-latest
+    concurrency:
+      group: tf-pr-${{ needs.gate.outputs.pr }}-plan
+      cancel-in-progress: true
     permissions:
-      actions: write
       contents: read
       id-token: write
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -73,23 +74,26 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
           executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
-          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
+          # The secret name depends on the workspace, so it is looked up by name.
+          secrets-tfvars: ${{ secrets[needs.gate.outputs.secret_name] }} # zizmor: ignore[overprovisioned-secrets]
 
-  apply-protected:
+  apply:
     needs: gate
     if: >-
       needs.gate.outputs.command == 'apply' &&
-      needs.gate.outputs.protected == 'true'
+      needs.gate.outputs.environment != ''
     runs-on: ubuntu-latest
-    environment: ${{ needs.gate.outputs.workspace }}
+    environment: ${{ needs.gate.outputs.environment }}
+    concurrency:
+      group: tf-pr-${{ needs.gate.outputs.pr }}-change
+      cancel-in-progress: false
     permissions:
-      actions: read
       contents: read
       id-token: write
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -105,50 +109,23 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
           executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
-          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
-
-  apply-open:
-    needs: gate
-    if: >-
-      needs.gate.outputs.command == 'apply' &&
-      needs.gate.outputs.protected != 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-      - uses: ./.github/actions/tf-run
-        with:
-          command: apply
-          ref: ${{ needs.gate.outputs.head_sha }}
-          workspace: ${{ needs.gate.outputs.workspace }}
-          head-ref: ${{ needs.gate.outputs.head_ref }}
-          pr: ${{ needs.gate.outputs.pr }}
-          comment-id: ${{ github.event.comment.id }}
-          role-arn: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
-          executable: ${{ vars.EXECUTABLE }}
-          github-token: ${{ github.token }}
-          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
+          # The secret name depends on the workspace, so it is looked up by name.
+          secrets-tfvars: ${{ secrets[needs.gate.outputs.secret_name] }} # zizmor: ignore[overprovisioned-secrets]
 
   unlock:
     needs: gate
     if: needs.gate.outputs.command == 'unlock'
     runs-on: ubuntu-latest
+    concurrency:
+      group: tf-pr-${{ needs.gate.outputs.pr }}-change
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false

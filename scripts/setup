@@ -349,8 +349,8 @@ valid_stage_name() {
     echo "'default' is reserved by Terraform workspaces."
     return 1
   fi
-  if [[ "$name" == preview-* ]]; then
-    echo "Names starting with 'preview-' are reserved for preview environments."
+  if [[ "$name" == "preview" || "$name" == preview-* ]]; then
+    echo "'preview' and names starting with 'preview-' are reserved for preview environments."
     return 1
   fi
   for ((i = 0; i < ${#ENV_NAMES[@]}; i++)); do
@@ -358,7 +358,15 @@ valid_stage_name() {
       echo "Environment '$name' already exists."
       return 1
     fi
+    if [[ "$(secret_suffix "${ENV_NAMES[$i]}")" == "$(secret_suffix "$name")" ]]; then
+      echo "'$name' and '${ENV_NAMES[$i]}' would share the secret TF_SECRETS_TFVARS_$(secret_suffix "$name")."
+      return 1
+    fi
   done
+}
+
+secret_suffix() {
+  printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_'
 }
 
 valid_branch() {
@@ -553,7 +561,7 @@ ask_environments() {
     protected=${REST_PROTECTED[$i]}
     ui_mark
     ui_select "Existing environment $name ← $branch" 0 \
-      "Keep"$'\t'"$( [[ "$protected" == "true" ]] && echo "protected" || echo "no approval")" \
+      "Keep"$'\t'"$([[ "$protected" == "true" ]] && echo "protected" || echo "no approval")" \
       "Edit"$'\t'"change name, branch or approval" \
       "Remove"$'\t'"drop it from pipeline.json"
     case "$UI_CHOICE" in
@@ -608,7 +616,7 @@ ask_preview() {
     enable=true
     ui_select "How should previews be triggered?" "$default" \
       "Branch prefix"$'\t'"${PREVIEW_PREFIX}feature-1 → preview-feature-1" \
-      "Branch suffix"$'\t'"feature/foo${PREVIEW_SUFFIX} → preview-feature-foo" \
+      "Branch suffix"$'\t'"feature/foo${PREVIEW_SUFFIX} → preview-feature--foo" \
       "Pull request label"$'\t'"label '${PREVIEW_LABEL}' on a PR → preview-<branch>"
     default=$UI_CHOICE
     case "$UI_CHOICE" in
@@ -642,8 +650,9 @@ ask_actions() {
   local default=false
   ui_step 4 4 "GitHub Actions"
   ui_hint "Run plan and apply from PR comments: /tf plan, /tf apply, /tf unlock."
+  ui_hint "Closing a pull request releases its lock."
   if [[ "$PREVIEW_MODE" != "off" ]]; then
-    ui_hint "Preview environments deploy automatically."
+    ui_hint "Preview environments deploy automatically and are destroyed when their pull request closes."
   fi
   ui_hint "Writes .github/workflows/*.yml. The .template files stay untouched."
   echo
@@ -688,10 +697,12 @@ write_config() {
 
 cfg() { jq -r "$1" "$CFG"; }
 
-render_commands_workflow() {
-  awk 'BEGIN { drop = 1 } drop && /^#/ { next } { drop = 0; print }' \
-    .github/workflows/terraform-commands.yml.template >"$1"
+# Copies a workflow template without its leading comment block.
+render_static_workflow() {
+  awk 'BEGIN { drop = 1 } drop && /^#/ { next } { drop = 0; print }' "$1" >"$2"
 }
+
+CHECKOUT_ACTION="actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0"
 
 preview_job() {
   local ref=$1
@@ -699,11 +710,20 @@ preview_job() {
   local pr=${3:-}
   cat <<EOF
     runs-on: ubuntu-latest
+    environment: preview
     permissions:
       contents: read
       id-token: write
+EOF
+  if [[ -n "$pr" ]]; then
+    cat <<EOF
+      issues: write
+      pull-requests: write
+EOF
+  fi
+  cat <<EOF
     steps:
-      - uses: actions/checkout@v4
+      - uses: ${CHECKOUT_ACTION}
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -721,7 +741,7 @@ EOF
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
           executable: ${{ vars.EXECUTABLE }}
           github-token: ${{ github.token }}
-          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS }}
+          secrets-tfvars: ${{ secrets.TF_SECRETS_TFVARS_PREVIEW }}
 EOF
 }
 
@@ -810,25 +830,30 @@ remove_op() {
   [[ -f "$1" ]] && OPS+=("- $1") || true
 }
 
+tfvars_value() {
+  sed -n "s/^$2[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$1" | head -n 1
+}
+
 stage_env_files() {
-  local name region project src backend_src candidate base
+  local name region project prefix src backend_src candidate base names
   region="eu-central-1"
   project="$PROJECT_NAME"
+  prefix="REPLACE_ME"
   src=""
   for candidate in environments/*.tfvars; do
     [[ -f "$candidate" ]] || continue
     base=$(basename "$candidate")
     [[ "$base" == *.backend.tfvars || "$base" == *.secrets.tfvars ]] && continue
-    base=${base%.tfvars}
-    [[ "$base" == preview-* ]] && continue
     src=$candidate
     break
   done
   if [[ -n "$src" ]]; then
-    region=$(sed -n 's/^aws_region[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$src" | head -n 1)
-    project=$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$src" | head -n 1)
+    region=$(tfvars_value "$src" aws_region)
+    project=$(tfvars_value "$src" project)
+    prefix=$(tfvars_value "$src" name_prefix)
     region=${region:-eu-central-1}
     project=${project:-$PROJECT_NAME}
+    prefix=${prefix:-REPLACE_ME}
   fi
   backend_src=""
   for candidate in environments/*.backend.tfvars; do
@@ -836,26 +861,34 @@ stage_env_files() {
     backend_src=$candidate
     break
   done
-  if [[ -z "$backend_src" && -f environments/preview.backend.tfvars.example ]]; then
-    backend_src=environments/preview.backend.tfvars.example
-  fi
   BACKEND_SRC=$backend_src
+  names=$(cfg '.environments[].name')
+  if [[ "$(cfg '.preview.mode')" != "off" ]]; then
+    names+=$'\npreview'
+  fi
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     if [[ ! -f "environments/${name}.tfvars" ]]; then
       cat >"$STAGE/environments/${name}.tfvars" <<EOF
-aws_region          = "${region}"
-project             = "${project}"
-example_bucket_name = "REPLACE_ME-${name}-example"
+aws_region  = "${region}"
+project     = "${project}"
+name_prefix = "${prefix}"
 EOF
       OPS+=("+ environments/${name}.tfvars")
     fi
     if [[ ! -f "environments/${name}.backend.tfvars" ]]; then
-      [[ -n "$backend_src" ]] || die "No backend file to copy for environments/${name}.backend.tfvars."
-      cp "$backend_src" "$STAGE/environments/${name}.backend.tfvars"
+      if [[ -n "$backend_src" ]]; then
+        cp "$backend_src" "$STAGE/environments/${name}.backend.tfvars"
+      else
+        cat >"$STAGE/environments/${name}.backend.tfvars" <<EOF
+bucket = "REPLACE_ME-tfstate"
+key    = "${project}/terraform.tfstate"
+region = "${region}"
+EOF
+      fi
       OPS+=("+ environments/${name}.backend.tfvars")
     fi
-  done < <(cfg '.environments[].name')
+  done <<<"$names"
 }
 
 find_leftovers() {
@@ -867,7 +900,7 @@ find_leftovers() {
     base=$(basename "$f")
     [[ "$base" == *.backend.tfvars || "$base" == *.secrets.tfvars ]] && continue
     base=${base%.tfvars}
-    [[ "$base" == preview-* ]] && continue
+    [[ "$base" == preview || "$base" == preview-* ]] && continue
     grep -qx "$base" <<<"$known" || LEFTOVERS+=("$f")
   done
 }
@@ -898,12 +931,15 @@ plan_files() {
       remove_op .github/workflows/terraform-preview.yml
     fi
   fi
-  if [[ "$ACTIONS_ENABLED" == "true" ]]; then
-    render_commands_workflow "$STAGE/.github/workflows/terraform-commands.yml"
-    stage_op .github/workflows/terraform-commands.yml
-  else
-    remove_op .github/workflows/terraform-commands.yml
-  fi
+  local wf
+  for wf in terraform-commands terraform-cleanup; do
+    if [[ "$ACTIONS_ENABLED" == "true" ]]; then
+      render_static_workflow ".github/workflows/${wf}.yml.template" "$STAGE/.github/workflows/${wf}.yml"
+      stage_op ".github/workflows/${wf}.yml"
+    else
+      remove_op ".github/workflows/${wf}.yml"
+    fi
+  done
 }
 
 apply_ops() {
@@ -1006,11 +1042,20 @@ print_next_steps() {
   done
 
   ui_heading "Next steps"
+  local registry=registry.terraform.io
+  [[ "$(cfg '.tool')" == "tofu" ]] && registry=registry.opentofu.org
+  if [[ -f .terraform.lock.hcl ]] && ! grep -q "provider \"${registry}/" .terraform.lock.hcl; then
+    n=$((n + 1))
+    printf '    %s%d.%s The provider lock is for the other tool. Refresh and commit it:\n' "$C_BOLD" "$n" "$C_RESET"
+    printf '         %srm .terraform.lock.hcl bootstrap/.terraform.lock.hcl%s\n' "$C_CYAN" "$C_RESET"
+    printf '         %s%s providers lock -platform=linux_amd64 -platform=darwin_arm64%s  %s(in . and in bootstrap/)%s\n' \
+      "$C_CYAN" "$(cfg '.tool')" "$C_RESET" "$C_DIM" "$C_RESET"
+  fi
   if [[ ${#created[@]} -gt 0 ]]; then
     n=$((n + 1))
     printf '    %s%d.%s Review the new environment files and replace REPLACE_ME:\n' "$C_BOLD" "$n" "$C_RESET"
     for ((i = 0; i < ${#created[@]}; i++)); do
-      if [[ "${created[$i]}" == *.backend.tfvars ]]; then
+      if [[ "${created[$i]}" == *.backend.tfvars && -n "$BACKEND_SRC" ]]; then
         printf '         %s  %s(copied from %s)%s\n' "${created[$i]}" "$C_DIM" "$BACKEND_SRC" "$C_RESET"
       else
         printf '         %s\n' "${created[$i]}"
@@ -1030,24 +1075,36 @@ print_next_steps() {
     n=$((n + 1))
     printf '    %s%d.%s Add required reviewers in GitHub: Settings → Environments → %s%s%s\n' \
       "$C_BOLD" "$n" "$C_RESET" "$C_BOLD" "$protected" "$C_RESET"
+    ui_hint "     /tf apply refuses to run on a protected stage until its environment has reviewers."
   fi
 
   n=$((n + 1))
-  printf '    %s%d.%s Trust these OIDC subjects in the IAM role %s(docs/pipeline.md)%s:\n' "$C_BOLD" "$n" "$C_RESET" "$C_DIM" "$C_RESET"
+  printf '    %s%d.%s Plan role (read-only), repository variable %sAWS_ROLE_ARN%s. Trust %s(docs/pipeline.md)%s:\n' \
+    "$C_BOLD" "$n" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
   printf '         %srepo:%s:ref:refs/heads/%s%s\n' "$C_CYAN" "$slug" "$branch" "$C_RESET"
+  printf '         %srepo:%s:pull_request%s\n' "$C_CYAN" "$slug" "$C_RESET"
+
+  n=$((n + 1))
+  printf '    %s%d.%s One apply role per GitHub environment, environment variable %sAWS_ROLE_ARN%s. Trust:\n' \
+    "$C_BOLD" "$n" "$C_RESET" "$C_BOLD" "$C_RESET"
   while IFS= read -r i; do
     [[ -n "$i" ]] || continue
     printf '         %srepo:%s:environment:%s%s\n' "$C_CYAN" "$slug" "$i" "$C_RESET"
-  done < <(cfg '.environments[] | select(.protected == true) | .name')
-  case "$mode" in
-    prefix) printf '         %srepo:%s:ref:refs/heads/%s*%s\n' "$C_CYAN" "$slug" "$(cfg '.preview.prefix')" "$C_RESET" ;;
-    suffix) printf '         %srepo:%s:ref:refs/heads/*%s%s\n' "$C_CYAN" "$slug" "$(cfg '.preview.suffix')" "$C_RESET" ;;
-    label) printf '         %srepo:%s:pull_request%s\n' "$C_CYAN" "$slug" "$C_RESET" ;;
-  esac
+  done < <(cfg '.environments[].name')
+  if [[ "$mode" != "off" ]]; then
+    printf '         %srepo:%s:environment:preview%s  %s(all previews)%s\n' "$C_CYAN" "$slug" "$C_RESET" "$C_DIM" "$C_RESET"
+  fi
+  ui_hint "     Repositories created after 2026-07-15 use repo:ORG@<owner-id>/REPO@<repo-id>:... in the subject."
 
   n=$((n + 1))
-  printf '    %s%d.%s Set the repository variable %sAWS_ROLE_ARN%s %s(optional: AWS_REGION, secret TF_SECRETS_TFVARS)%s\n' \
-    "$C_BOLD" "$n" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+  printf '    %s%d.%s Optional secrets, one per environment, as repository secrets:\n' "$C_BOLD" "$n" "$C_RESET"
+  while IFS= read -r i; do
+    [[ -n "$i" ]] || continue
+    printf '         %sTF_SECRETS_TFVARS_%s%s\n' "$C_CYAN" "$(secret_suffix "$i")" "$C_RESET"
+  done < <(cfg '.environments[].name')
+  if [[ "$mode" != "off" ]]; then
+    printf '         %sTF_SECRETS_TFVARS_PREVIEW%s\n' "$C_CYAN" "$C_RESET"
+  fi
 
   if [[ "$mode" == "label" ]]; then
     n=$((n + 1))

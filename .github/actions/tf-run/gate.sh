@@ -85,6 +85,20 @@ if ! ws=$(bash "$SCRIPT_DIR/workspace.sh" "$head_ref" "$base_ref" 2>"$err_file")
 fi
 rm -f "$err_file"
 protected=$(bash "$ROOT/scripts/pipeline.sh" protected "$ws")
+environment=$(bash "$ROOT/scripts/pipeline.sh" environment "$ws")
+secret_name=$(bash "$ROOT/scripts/pipeline.sh" secret-name "$ws")
+
+# Apply on a protected stage only runs when its GitHub environment has reviewers.
+if [[ "$command" == "apply" && "$protected" == "true" ]]; then
+  if ! env_json=$(gh api "repos/${GITHUB_REPOSITORY}/environments/${environment}" 2>/dev/null); then
+    env_json='{}'
+  fi
+  if ! jq -e '[.protection_rules[]? | select(.type == "required_reviewers")] | length > 0' >/dev/null <<<"$env_json"; then
+    post "$(printf 'Workspace `%s` is protected, but the GitHub environment `%s` has no required reviewers. Add them under Settings → Environments → `%s`, then run `/tf apply` again.' "$ws" "$environment" "$environment")"
+    react "-1"
+    exit 1
+  fi
+fi
 
 react "eyes"
 
@@ -95,8 +109,11 @@ react "eyes"
   echo "workspace<<EOF"
   echo "$ws"
   echo "EOF"
-  echo "protected<<EOF"
-  echo "$protected"
+  echo "environment<<EOF"
+  echo "$environment"
+  echo "EOF"
+  echo "secret_name<<EOF"
+  echo "$secret_name"
   echo "EOF"
   echo "head_sha<<EOF"
   echo "$head_sha"

@@ -1,3 +1,3 @@
-aws_region          = "eu-central-1"
-project             = "terraform-aws-template"
-example_bucket_name = "REPLACE_ME-preview-example"
+aws_region  = "eu-central-1"
+project     = "terraform-aws-template"
+name_prefix = "REPLACE_ME"
