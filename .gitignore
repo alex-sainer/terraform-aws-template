@@ -11,5 +11,6 @@ override.tf.json
 
 environments/*.secrets.tfvars
 environments/*.tfplan
+bootstrap/*.tfplan
 
 .DS_Store

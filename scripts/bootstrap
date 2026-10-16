@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Creates the state bucket from bootstrap/, with local state.
+# Plans first and applies that plan only. After a successful apply, writes
+# the bucket name into backend files that still contain the placeholder.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [[ -z "${EXECUTABLE:-}" ]]; then
+  EXECUTABLE="$(bash "$ROOT/scripts/pipeline.sh" tool)"
+fi
+case "$EXECUTABLE" in
+  terraform | tofu) ;;
+  *)
+    echo "EXECUTABLE must be terraform or tofu, not '$EXECUTABLE'." >&2
+    exit 1
+    ;;
+esac
+
+PLAN="$ROOT/bootstrap/bootstrap.tfplan"
+PLACEHOLDER='REPLACE_ME-tfstate'
+
+usage() {
+  cat <<EOF
+Usage: scripts/bootstrap [--bucket NAME] [--region REGION] [--yes]
+
+Creates the shared state bucket once, from bootstrap/, with local state.
+Uses the tool from pipeline.json (${EXECUTABLE}). For one run:
+EXECUTABLE=tofu scripts/bootstrap
+
+Asks for anything not passed as a flag. Plans first, shows the plan, and
+applies only after confirmation. --yes applies without asking, for a
+terminal-less run. Re-running plans the change against the existing bucket.
+
+  --bucket NAME    Globally unique S3 bucket name.
+  --region REGION  AWS region of the bucket. Default: the region already in
+                   the bootstrap state, otherwise aws_region from
+                   environments/*.tfvars, otherwise eu-central-1.
+  --yes            Apply the plan without a confirmation prompt.
+  -h, --help       Show this help.
+
+AWS credentials must already work for the target account. The local state
+stays in bootstrap/ and is not committed. After apply, every
+environments/*.backend.tfvars whose bucket is still "${PLACEHOLDER}" is
+updated to this bucket and region.
+
+EOF
+}
+
+BUCKET=""
+REGION=""
+REGION_SET=0
+ASSUME_YES=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bucket)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
+      BUCKET="$2"
+      shift 2
+      ;;
+    --bucket=*)
+      BUCKET="${1#--bucket=}"
+      [[ -n "$BUCKET" ]] || {
+        usage >&2
+        exit 2
+      }
+      shift
+      ;;
+    --region)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
+      REGION="$2"
+      REGION_SET=1
+      shift 2
+      ;;
+    --region=*)
+      REGION="${1#--region=}"
+      [[ -n "$REGION" ]] || {
+        usage >&2
+        exit 2
+      }
+      REGION_SET=1
+      shift
+      ;;
+    --yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+valid_bucket() {
+  local name=$1
+  local len=${#name}
+  if [[ "$len" -lt 3 || "$len" -gt 63 ]]; then
+    echo "Bucket name must be 3 to 63 characters, not '$name'." >&2
+    return 1
+  fi
+  if ! [[ "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+    echo "Bucket name '$name' must use lowercase letters, digits, '.' and '-', and start and end with a letter or digit." >&2
+    return 1
+  fi
+  if [[ "$name" == *..* || "$name" == *.-* || "$name" == *-.* || "$name" == xn--* || "$name" == *-s3alias || "$name" == *--ol-s3 ]]; then
+    echo "Bucket name '$name' is not a valid S3 name." >&2
+    return 1
+  fi
+  if [[ "$name" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+    echo "Bucket name '$name' must not look like an IP address." >&2
+    return 1
+  fi
+}
+
+valid_region() {
+  local region=$1
+  if ! [[ "$region" =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]]; then
+    echo "Region '$region' does not look like an AWS region, for example eu-central-1." >&2
+    return 1
+  fi
+}
+
+# Bucket and region already recorded by a previous bootstrap, if any.
+state_value() {
+  local query=$1
+  [[ -f bootstrap/terraform.tfstate ]] || return 1
+  jq -er "$query" bootstrap/terraform.tfstate 2>/dev/null
+}
+
+tfvars_region() {
+  local f value
+  for f in environments/*.tfvars; do
+    [[ -f "$f" ]] || continue
+    [[ "$(basename "$f")" == *.backend.tfvars || "$(basename "$f")" == *.secrets.tfvars ]] && continue
+    value=$(sed -n 's/^aws_region[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+read_line() {
+  local value
+  if ! IFS= read -r value; then
+    echo
+    echo "Aborted. Nothing was applied." >&2
+    exit 1
+  fi
+  printf '%s\n' "$value"
+}
+
+STATE_BUCKET="$(state_value '.outputs.state_bucket_name.value' || true)"
+STATE_REGION="$(state_value '.resources[] | select(.type == "aws_s3_bucket" and .name == "tfstate") | .instances[0].attributes.region' || true)"
+DEFAULT_REGION="$STATE_REGION"
+if [[ -z "$DEFAULT_REGION" ]]; then
+  DEFAULT_REGION="$(tfvars_region || true)"
+fi
+DEFAULT_REGION="${DEFAULT_REGION:-eu-central-1}"
+
+if [[ -z "$BUCKET" ]]; then
+  if [[ -t 0 && "$ASSUME_YES" -eq 0 ]]; then
+    if [[ -n "$STATE_BUCKET" ]]; then
+      printf 'State bucket [%s]: ' "$STATE_BUCKET"
+    else
+      printf 'State bucket name (globally unique, lowercase): '
+    fi
+    BUCKET=$(read_line)
+    BUCKET="${BUCKET:-$STATE_BUCKET}"
+  else
+    BUCKET="$STATE_BUCKET"
+  fi
+fi
+if [[ -z "$BUCKET" ]]; then
+  echo "A bucket name is required. Pass --bucket NAME." >&2
+  exit 2
+fi
+valid_bucket "$BUCKET"
+
+if [[ "$REGION_SET" -eq 0 ]]; then
+  if [[ -t 0 && "$ASSUME_YES" -eq 0 ]]; then
+    printf 'AWS region [%s]: ' "$DEFAULT_REGION"
+    REGION=$(read_line)
+    REGION="${REGION:-$DEFAULT_REGION}"
+  else
+    REGION="$DEFAULT_REGION"
+  fi
+fi
+valid_region "$REGION"
+
+if [[ -n "$STATE_BUCKET" && "$BUCKET" != "$STATE_BUCKET" ]]; then
+  echo "Bootstrap state already records bucket '$STATE_BUCKET'." >&2
+  echo "Planning '$BUCKET' instead. The bucket has prevent_destroy, so a rename fails." >&2
+fi
+if [[ -n "$STATE_REGION" && "$REGION" != "$STATE_REGION" ]]; then
+  echo "Bootstrap state already records region '$STATE_REGION'. Planning '$REGION' instead." >&2
+fi
+
+if [[ "$ASSUME_YES" -eq 0 && ! -t 0 ]]; then
+  echo "No terminal. Pass --yes to apply without a prompt." >&2
+  exit 2
+fi
+
+if ! command -v "$EXECUTABLE" >/dev/null 2>&1; then
+  echo "Program '$EXECUTABLE' was not found." >&2
+  exit 1
+fi
+
+echo "Tool: $EXECUTABLE. Bucket: $BUCKET. Region: $REGION."
+
+(
+  cd "$ROOT/bootstrap"
+  "$EXECUTABLE" init -input=false
+  "$EXECUTABLE" plan -input=false \
+    -var "state_bucket_name=$BUCKET" \
+    -var "aws_region=$REGION" \
+    -out="$PLAN"
+)
+
+echo
+"$EXECUTABLE" -chdir="$ROOT/bootstrap" show "$PLAN"
+
+apply_plan() {
+  (
+    cd "$ROOT/bootstrap"
+    "$EXECUTABLE" apply -input=false "$PLAN"
+  )
+  rm -f "$PLAN"
+}
+
+if [[ "$ASSUME_YES" -eq 1 ]]; then
+  apply_plan
+else
+  printf 'Apply this plan? [y/N] '
+  answer=$(read_line)
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    y | yes) apply_plan ;;
+    *)
+      rm -f "$PLAN"
+      echo "Aborted. Nothing was applied." >&2
+      exit 0
+      ;;
+  esac
+fi
+
+updated=0
+for f in environments/*.backend.tfvars; do
+  [[ -f "$f" ]] || continue
+  grep -q "^bucket[[:space:]]*=[[:space:]]*\"${PLACEHOLDER}\"" "$f" || continue
+  tmp=$(mktemp)
+  awk -v bucket="$BUCKET" -v region="$REGION" '
+    /^bucket[[:space:]]*=/ { print "bucket = \"" bucket "\""; next }
+    /^region[[:space:]]*=/ { print "region = \"" region "\""; next }
+    { print }
+  ' "$f" >"$tmp"
+  mv "$tmp" "$f"
+  echo "Updated $f: bucket and region."
+  updated=1
+done
+
+if [[ "$updated" -eq 0 ]]; then
+  echo "No backend file still has bucket = \"$PLACEHOLDER\"."
+  echo "Point environments/*.backend.tfvars at '$BUCKET' yourself where this bucket should be used."
+fi
+echo "Bootstrap state stays local in bootstrap/terraform.tfstate. Keep it, or import the bucket again later."

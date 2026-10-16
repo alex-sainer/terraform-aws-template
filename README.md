@@ -43,14 +43,19 @@ The script asks four things with arrow-key menus: the tool (it shows which one i
 
 ### 3. Create the state bucket
 
-Terraform stores what it has created in a state file. This template keeps it in an S3 bucket that is created once, separately, in [`bootstrap/`](bootstrap/main.tf):
+Terraform stores what it has created in a state file. This template keeps it in an S3 bucket that is created once, separately, in [`bootstrap/`](bootstrap/main.tf). `scripts/bootstrap` asks for the bucket name and the region, plans, and applies after you confirm:
 
 ```bash
-tofu -chdir=bootstrap init
-tofu -chdir=bootstrap apply -var state_bucket_name=acme-shop-tfstate -var aws_region=eu-central-1
+scripts/bootstrap
 ```
 
-Pick a globally unique bucket name. The bucket gets versioning, encryption, a public access block, a TLS-only policy, a 90-day expiry for old state versions, and `prevent_destroy`. The local state in `bootstrap/` is not committed; keep it if you want to change the bucket later, or import the bucket again when needed.
+Without a terminal, pass the values and apply directly:
+
+```bash
+scripts/bootstrap --bucket acme-shop-tfstate --region eu-central-1 --yes
+```
+
+The bucket name must be globally unique. The bucket gets versioning, encryption, a public access block, a TLS-only policy, a 90-day expiry for old state versions, and `prevent_destroy`. The script then writes that name into every `environments/*.backend.tfvars` whose `bucket` is still `REPLACE_ME-tfstate`, and sets `region` there to the bucket's region. The local state in `bootstrap/` is not committed; keep it if you want to change the bucket later, or import the bucket again when needed. Running the script again plans against the existing bucket.
 
 ### 4. Replace the placeholders
 
@@ -58,9 +63,9 @@ Open `environments/prod.tfvars` and `environments/prod.backend.tfvars`:
 
 - `name_prefix` — a short, globally unique, lowercase prefix for your resource names, for example `acme-shop`. The environment is appended, so the example bucket in `prod` becomes `acme-shop-prod-example`. Until you replace `REPLACE_ME`, plan stops with a validation error on purpose.
 - `project` — your project name; it becomes the `Project` tag on every resource.
-- `bucket` — the state bucket from step 3.
+- `bucket` and `region` in the backend file — written by `scripts/bootstrap` when they still had the placeholder. `region` here is the region of the state bucket.
 - `key` — the path of the state file inside the bucket. Replace `terraform-aws-template/` with your project name. The IAM policies in [docs/pipeline.md](docs/pipeline.md) use the same path.
-- `aws_region` and `region` — your region, if not `eu-central-1`.
+- `aws_region` — the region your resources are created in, if not `eu-central-1`. It may differ from the state bucket's region.
 
 ### 5. Init, plan, apply
 
@@ -208,6 +213,7 @@ Pass `name_prefix` and `local.environment` in rather than reading them inside th
 - `environments/<env>.tfplan` — plan file, not in Git
 - `pipeline.json` — tool, stages, branch mapping, and preview mode, for local runs and GitHub Actions
 - `scripts/tf` — init, plan, apply, import for the environment of the branch
+- `scripts/bootstrap` — creates the state bucket once and fills in the backend placeholder
 - `scripts/setup` — writes `pipeline.json`, env files, and the workflows
 - `scripts/pipeline.sh` — reads `pipeline.json` for the other scripts
 - `scripts/pipeline-test.sh` — tests for the branch mapping

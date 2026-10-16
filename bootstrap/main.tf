@@ -1,7 +1,5 @@
 # Creates the shared state bucket once, with local state.
-# Run from the repository root:
-#   tofu -chdir=bootstrap init
-#   tofu -chdir=bootstrap apply -var state_bucket_name=acme-shop-tfstate -var aws_region=eu-central-1
+# Run from the repository root: scripts/bootstrap
 
 terraform {
   required_version = ">= 1.10.0"

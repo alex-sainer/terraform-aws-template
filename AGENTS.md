@@ -9,6 +9,7 @@ This is a GitHub template repository for AWS projects with Terraform or OpenTofu
 - `environments/<env>.tfvars`, `<env>.backend.tfvars` — per-environment values and backend. `<env>.secrets.tfvars` and `<env>.tfplan` are gitignored.
 - `pipeline.json` — tool, stages, branch mapping, preview mode. The single source of truth for local runs and CI.
 - `scripts/tf` — the only way plan, apply, init, import are run, locally and in CI.
+- `scripts/bootstrap` — creates the state bucket from `bootstrap/` (local state). Apply runs only the plan from the same invocation. It fills `REPLACE_ME-tfstate` in backend files; it does not take other arguments through to Terraform.
 - `scripts/pipeline.sh` — reads `pipeline.json`. Every other script asks it; nothing else parses the file.
 - `scripts/setup` — interactive CLI that writes `pipeline.json`, env files, and the workflows.
 - `scripts/pipeline-test.sh` — tests for `pipeline.sh` with their own fixtures.
